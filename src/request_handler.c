@@ -16,6 +16,7 @@
 
 #include "../config/vzw_secrets.h"
 #include "firmware_requests.h"
+#include "redis_connect.h"
 #include "vzw_connect.h"
 
 #define CONTENT_TYPE "Content-Type"
@@ -204,6 +205,25 @@ fail:
   nxt_unit_request_done(req_info, rc);
 }
 
+void redis_request_handler(nxt_unit_request_info_t *req_info, int rc) {
+  rc = response_init(req_info, rc, 200, TEXT_PLAIN_UTF8);
+  if (rc == 1) {
+    goto fail;
+  }
+
+  redisContext *c = redis_connect();
+
+  rc = redis_set(c, "hiredis", "its_alive");
+  if (rc == 1) {
+    goto fail;
+  }
+
+  rc = redis_get(c, "hiredis");
+
+fail:
+  nxt_unit_request_done(req_info, rc);
+}
+
 void request_router(nxt_unit_request_info_t *req_info) {
   int rc = 0;
   nxt_unit_sptr_t *rp = &req_info->request->path;
@@ -214,6 +234,8 @@ void request_router(nxt_unit_request_info_t *req_info) {
     (void)vzw_request_handler(req_info, rc);
   } else if ((strncmp(path, "/firmware", 9) == 0)) {
     (void)firmware_request_handler(req_info, rc);
+  } else if ((strncmp(path, "/db", 3) == 0)) {
+    (void)redis_request_handler(req_info, rc);
   } else {
     response_init(req_info, rc, 404, TEXT_PLAIN_UTF8);
     if (rc == 1) {

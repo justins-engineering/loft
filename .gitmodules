@@ -7,3 +7,6 @@
 [submodule "vzw-nidd-front-end"]
 	path = modules/vzw-nidd-front-end
 	url = https://github.com/justins-engineering/vzw-nidd-front-end.git
+[submodule "hiredis"]
+	path = modules/hiredis
+	url = https://github.com/redis/hiredis.git

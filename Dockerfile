@@ -6,7 +6,19 @@ LABEL org.opencontainers.image.url="https://github.com/bandogora/nunit-Ceasy"
 LABEL org.opencontainers.image.source="https://github.com/bandogora/nunit-Ceasy"
 LABEL org.opencontainers.image.documentation="https://unit.nginx.org/installation/#docker-images"
 
+# NGINX Unit URL and version
+ARG nginx_unit_link="https://github.com/nginx/unit"
+ARG nginx_unit_version="1.32.1-1"
+
+# Redis download URL
+ARG redis_stable_link="https://download.redis.io/redis-stable.tar.gz"
+ARG redis_stable_sha256="https://download.redis.io/redis-stable.tar.gz.SHA256SUM"
+
+# Debugging build? Override ARG with CLI flag "--build-arg debug=true"
 ARG debug=false
+
+# Debugging Unit? Override ARG with CLI flag "--build-arg debug_unit=true"
+ARG debug_unit=false
 
 ARG prefix="/usr"
 ARG exec_prefix="$prefix"
@@ -74,7 +86,7 @@ RUN set -ex \
   && apt-get update \
   && if [ "$debug" = "true" ]; then \
     apt-get install --no-install-recommends --no-install-suggests -y ca-certificates git build-essential \
-    libssl-dev libpcre2-dev curl pkg-config libcurl4-openssl-dev vim libasan8\
+    libssl-dev libpcre2-dev curl pkg-config libcurl4-openssl-dev vim libasan8 libjemalloc-dev\
     && echo "alias ls='ls -F --color=auto'" >> /root/.bashrc \
     && echo "alias grep='grep -nI --color=auto'" >> /root/.bashrc; \
   else \
@@ -87,7 +99,7 @@ RUN set -ex \
   && mkdir -p \
     $bin_dir \
     $UNIT_SBIN_DIR \
-    $include_dir \
+    $include_dir/hiredis/adapters \
     $lib_dir \
     $data_root_dir \
     $man_dir \
@@ -100,6 +112,9 @@ RUN set -ex \
     $app_include_dir \
     $app_lib_dir \
     $app_clone_dir/config \
+    $app_clone_dir/modules/hiredis/adapters \
+    $app_clone_dir/modules/hiredis/include/hiredis \
+    $app_clone_dir/modules/hiredis/lib \
     $app_clone_dir/modules/jsmn \
     $app_clone_dir/modules/nibble-and-a-half \
     $app_firmware_dir \
@@ -129,14 +144,33 @@ RUN set -ex \
   && chown root:$app_group $app_firmware_dir \
   && chmod -R 775 $app_firmware_dir
 
-# Clone Unit
-RUN set -ex && git clone --depth 1 -b 1.32.1-1 https://github.com/nginx/unit $unit_clone_dir
+# Download Redis stable tarball and check SHA256
+RUN set -ex \
+&& if [ "$debug" = "true" ]; then \
+  curl -O $redis_stable_link \
+  && curl $redis_stable_sha256 | sha256sum -c; \
+fi
 
+# Install Redis CLI
+RUN set -ex \
+&& if [ "$debug" = "true" ]; then \
+  tar xzf redis-stable.tar.gz \
+  && make -C redis-stable \
+  && cp redis-stable/src/redis-cli $bin_dir \
+  && chown root:$app_group $bin_dir/redis-cli \
+  && chmod 755 $bin_dir/redis-cli \
+  && rm -rf redis-stable/ redis-stable.tar.gz; \
+fi
+
+# Clone Unit
+RUN set -ex && git clone --depth 1 -b $nginx_unit_version $nginx_unit_link $unit_clone_dir
+
+# Change working directory
 WORKDIR $unit_clone_dir
 
 # Configure, make, and install unitd
 RUN set -ex \
-  && if [ "$debug" = "true" ]; \
+  && if [ "$debug_unit" = "true" ]; \
     then ./configure $unit_config_args --debug --cc-opt="$(eval $cc_opt)" --ld-opt="$(eval $ld_opt)"; \
     else ./configure $unit_config_args --cc-opt="$(eval $cc_opt)" --ld-opt="$(eval $ld_opt)"; \
   fi \
@@ -160,14 +194,21 @@ RUN set -ex \
   && apt-get update \
   && apt-get --no-install-recommends --no-install-suggests -y install $(cat /requirements.apt)
 
+# Change working directory
 WORKDIR $app_clone_dir
+
+# Copy module source files
+COPY --link ./modules/hiredis/* "$app_clone_dir"/modules/hiredis
+COPY --link ./modules/hiredis/adapters/* "$app_clone_dir"/modules/hiredis/adapters
+COPY --link ./modules/jsmn/* "$app_clone_dir"/modules/jsmn
+COPY --link ./modules/nibble-and-a-half/* "$app_clone_dir"/modules/nibble-and-a-half
 
 # Copy app source files
 COPY --link ./src/* "$app_src_dir"
-COPY --link ./include/* "$app_include_dir"
+COPY --link ./include/*.h "$app_include_dir"
 COPY --link ./Makefile "$app_clone_dir"
-COPY --link ./modules/jsmn/* "$app_clone_dir"/modules/jsmn
-COPY --link ./modules/nibble-and-a-half/* "$app_clone_dir"/modules/nibble-and-a-half
+
+# Copy app assets
 COPY --link ./assets/*.html "$app_assets_dir"
 COPY --link ./assets/images/* "$app_assets_dir/images"
 COPY --link ./assets/javascripts/* "$app_assets_dir/javascripts"
@@ -176,8 +217,13 @@ COPY --link ./assets/stylesheets/* "$app_assets_dir/stylesheets"
 RUN --mount=type=secret,id=vzw_secrets.h set -x \
   && cp /run/secrets/vzw_secrets.h config/vzw_secrets.h
 
+# RUN set -x \
+#   && make -C ./modules/hiredis install PREFIX=. \
+# 	&& cp -R ./modules/hiredis/include/hiredis ./include/ \
+# 	&& cp ./modules/hiredis/lib/libhiredis.a ./lib/
+
 # Compile and link C app against libunit.a
-Run set -x \
+RUN set -x \
   && if [ "$debug" = "true" ]; \
     then make -j $(eval $ncpu) CC=gcc  EXTRA_CFLAGS=-g1\ -fsanitize=address EXTRA_LDFLAGS=-lasan; \
     else make -j $(eval $ncpu) CC=gcc; \
