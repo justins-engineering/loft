@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM debian:stable-slim
 
 LABEL org.opencontainers.image.title="Unit (C)"
@@ -53,7 +55,7 @@ ENV UNIT_RUN_STATE_DIR="$local_state_dir/run/unit"
 ENV UNIT_PID_PATH="$UNIT_RUN_STATE_DIR/unit.pid"
 ENV UNIT_SOCKET="$UNIT_RUN_STATE_DIR/control.unit.sock"
 ENV UNIT_SBIN_DIR="$exec_prefix/sbin"
-ENV DEB_CFLAGS_MAINT_APPEND="-Wp,-D_FORTIFY_SOURCE=2 -march=native -fPIC"
+ENV DEB_CFLAGS_MAINT_APPEND="-Wp,-D_FORTIFY_SOURCE=2 -march=native -mtune=native -fPIC"
 ENV DEB_LDFLAGS_MAINT_APPEND="-Wl,--as-needed -pie"
 ENV DEB_BUILD_MAINT_OPTIONS="hardening=+all,-pie"
 
@@ -216,11 +218,6 @@ COPY --link ./assets/stylesheets/* "$app_assets_dir/stylesheets"
 
 RUN --mount=type=secret,id=vzw_secrets.h set -x \
   && cp /run/secrets/vzw_secrets.h config/vzw_secrets.h
-
-# RUN set -x \
-#   && make -C ./modules/hiredis install PREFIX=. \
-# 	&& cp -R ./modules/hiredis/include/hiredis ./include/ \
-# 	&& cp ./modules/hiredis/lib/libhiredis.a ./lib/
 
 # Compile and link C app against libunit.a
 RUN set -x \

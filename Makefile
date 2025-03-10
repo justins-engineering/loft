@@ -1,59 +1,80 @@
 CC ?= gcc
 DIR ?= .
-app_bin_dir ?= /usr/bin
 EXTRA_CFLAGS ?=
 EXTRA_LDFLAGS ?=
 
-CFLAGS ?= -O3 -fstack-protector-strong -Wall -Wextra -Wformat -Winline -Werror=format-security \
-	-D_FORTIFY_SOURCE=2 -march=native -fPIC -I$(DIR)/include -fanalyzer $(EXTRA_CFLAGS)
-LDFLAGS ?= -Wl,-z,relro -Wl,-z,now -Wl,--as-needed -pie -L$(DIR) -L$(DIR)/lib -lc -lpthread \
-	-lcurl -lunit -lnaah64 -lhiredis $(EXTRA_LDFLAGS)
+INSTALL ?= cp -pPR
+INSTALL_INCLUDE_PATH = $(DIR)/include
+INSTALL_LIBRARY_PATH = $(DIR)/lib
+MODULE_PATH = $(DIR)/modules
 
-VPATH = $(DIR)/src:$(DIR)/include
+OPTIMIZATION ?= -O3
+WARNINGS = -Wall -Wextra -Wformat -Winline -Werror=format-security -Wstrict-prototypes -Wwrite-strings \
+	-Wno-missing-field-initializers -pedantic
 
-INSTALL?= cp -pPR
-INSTALL_INCLUDE_PATH=$(DIR)/include
-INSTALL_LIBRARY_PATH=$(DIR)/lib
-MODULE_PATH= $(DIR)/modules
+CFLAGS ?= -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fanalyzer
+LDFLAGS ?= -Wl,-z,relro -Wl,-z,now -Wl,--as-needed -pie
+
+NATIVE?=1
+ifeq ($(NATIVE),1)
+  arch = -march=native -mtune=native
+endif
+
+linked_libs = -lc -lpthread -lssl -lcrypto -lcurl -lunit -lnaah64 -lhiredis -lhiredis_ssl
+
+CFLAGS += $(OPTIMIZATION) -fPIC $(WARNINGS) $(EXTRA_CFLAGS) $(arch)
+LDFLAGS += -L$(DIR) -L$(INSTALL_LIBRARY_PATH) $(linked_libs) $(EXTRA_LDFLAGS)
+
+VPATH = $(DIR)/src:$(INSTALL_INCLUDE_PATH)
+
+app_bin_dir ?= /usr/bin
 
 objects = main.o jsmn.o json_helpers.o curl_callbacks.o vzw_connect.o request_handler.o \
 	firmware_requests.o redis_connect.o
 
-all: jsmn.h base64.h libnaah64.a libhiredis.a app
+hiredis_headers = $(addprefix hiredis/, hiredis.h async.h read.h sds.h alloc.h sockcompat.h hiredis_ssl.h adapters/*.h)
 
-app: config/vzw_secrets.h $(objects)
-	$(CC) $(CFLAGS) $(objects) -o $(DIR)/app $(LDFLAGS)
-	chmod +x $(DIR)/app
+all: libnaah64.a libhiredis.a libhiredis_ssl.a app
 
-%.o: %.c
-	$(CC) -c $(CFLAGS) -o $@ $<
-
-.PHONY: clean jsmn.h base64.h libnaah64.a libhiredis.a install
-
-libnaah64.a:
-	$(MAKE) -C $(MODULE_PATH)/nibble-and-a-half libnaah64.a
-	$(INSTALL) $(MODULE_PATH)/nibble-and-a-half/libnaah64.a $(INSTALL_LIBRARY_PATH)
-
-base64.h:
-	$(INSTALL) $(MODULE_PATH)/nibble-and-a-half/base64.h $(INSTALL_INCLUDE_PATH)
-
-jsmn.h:
+$(INSTALL_INCLUDE_PATH)/jsmn.h:
 	$(INSTALL) $(MODULE_PATH)/jsmn/jsmn.h $(INSTALL_INCLUDE_PATH)
 
-libhiredis.a:
-	$(MAKE) -C $(MODULE_PATH)/hiredis static
+$(INSTALL_INCLUDE_PATH)/base64.h:
+	$(INSTALL) $(MODULE_PATH)/nibble-and-a-half/base64.h $(INSTALL_INCLUDE_PATH)
+
+$(INSTALL_INCLUDE_PATH)/hiredis/adapters:
 	mkdir -p $(INSTALL_INCLUDE_PATH)/hiredis/adapters
-	cd $(MODULE_PATH)/hiredis && \
-		$(INSTALL) hiredis.h async.h read.h sds.h alloc.h sockcompat.h ../../$(INSTALL_INCLUDE_PATH)/hiredis
-	$(INSTALL) $(MODULE_PATH)/hiredis/adapters/*.h $(INSTALL_INCLUDE_PATH)/hiredis/adapters
+
+$(INSTALL_INCLUDE_PATH)/hiredis/%.h: | $(INSTALL_INCLUDE_PATH)/hiredis/adapters
+	$(INSTALL) $(subst $(INSTALL_INCLUDE_PATH), $(MODULE_PATH), $(DIR)/$@) $(@D)
+
+libnaah64.a:
+	$(MAKE) -C $(MODULE_PATH)/nibble-and-a-half libnaah64.a CFLAGS='$(CFLAGS)'
+	$(INSTALL) $(MODULE_PATH)/nibble-and-a-half/libnaah64.a $(INSTALL_LIBRARY_PATH)
+
+libhiredis.a:
+	$(MAKE) -C $(MODULE_PATH)/hiredis libhiredis.a DEBUG_FLAGS='' CFLAGS='-fstack-protector-strong -D_FORTIFY_SOURCE=2 $(arch)'
 	$(INSTALL) $(MODULE_PATH)/hiredis/libhiredis.a $(INSTALL_LIBRARY_PATH)
+
+libhiredis_ssl.a:
+	$(MAKE) -C $(MODULE_PATH)/hiredis libhiredis_ssl.a DEBUG_FLAGS='' USE_SSL=1 CFLAGS='-fstack-protector-strong -D_FORTIFY_SOURCE=2 $(arch)'
+	$(INSTALL) $(MODULE_PATH)/hiredis/libhiredis_ssl.a $(INSTALL_LIBRARY_PATH)
+
+app: config/vzw_secrets.h $(addprefix $(INSTALL_INCLUDE_PATH)/, jsmn.h base64.h $(hiredis_headers)) $(objects)
+	$(CC) $(CFLAGS) $(objects) -o $(DIR)/app $(LDFLAGS)
+	chmod +x $(DIR)/app
 
 install: app
 	cp $(DIR)/app $(app_bin_dir)/iots
 
+# This shouldn't depend on phony targets but they're order-only and it works for now
+%.o: %.c | libnaah64.a libhiredis.a libhiredis_ssl.a
+	$(CC) -c $(CFLAGS) -I$(INSTALL_INCLUDE_PATH) -o $@ $<
+
 clean:
-	rm -rf $(DIR)/app $(objects) $(DIR)/lib/libnaah64.a $(DIR)/include/jsmn.h \
-		$(DIR)/include/base64.h $(DIR)/include/hiredis $(DIR)/lib/libhiredis.a \
-		$(MODULE_PATH)/hiredis/include $(MODULE_PATH)/hiredis/lib
+	rm -rf $(DIR)/app $(objects) $(DIR)/lib/*.a $(DIR)/include/jsmn.h \
+		$(DIR)/include/base64.h $(DIR)/include/hiredis
 	$(MAKE) -C $(MODULE_PATH)/nibble-and-a-half clean
 	$(MAKE) -C $(MODULE_PATH)/hiredis clean
+
+.PHONY: clean libnaah64.a libhiredis.a libhiredis_ssl.a install
