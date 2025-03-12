@@ -222,12 +222,11 @@ RUN --mount=type=secret,id=vzw_secrets.h set -x \
 # Compile and link C app against libunit.a
 RUN set -x \
   && if [ "$debug" = "true" ]; \
-    then make -j $(eval $ncpu) CC=gcc  EXTRA_CFLAGS=-g1\ -fsanitize=address EXTRA_LDFLAGS=-lasan; \
+    then make -j $(eval $ncpu) CC=gcc DEBUG=1 EXTRA_CFLAGS=-fsanitize=address\ -static-libasan EXTRA_LDFLAGS=-fsanitize=address; \
     else make -j $(eval $ncpu) CC=gcc; \
   fi \
   && make install \
   && rm -f config/vzw_secrets.h \
-  && cd \
   && apt-get purge -y --auto-remove build-essential \
   && rm -rf /usr/src/* \
   && rm -rf /var/lib/apt/lists/* \
