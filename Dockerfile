@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.documentation="https://unit.nginx.org/installatio
 
 # NGINX Unit URL and version
 ARG nginx_unit_link="https://github.com/nginx/unit"
-ARG nginx_unit_version="1.32.1-1"
+ARG nginx_unit_version="1.34.2-1"
 
 # Redis download URL
 ARG redis_stable_link="https://download.redis.io/redis-stable.tar.gz"
