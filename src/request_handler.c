@@ -52,7 +52,7 @@ fail:
 }
 
 static int response_init(
-    nxt_unit_request_info_t *req_info, int rc, uint16_t status, char *type
+    nxt_unit_request_info_t *req_info, int rc, uint16_t status, const char *type
 ) {
   rc = nxt_unit_response_init(
       req_info, status, 1, nxt_length(CONTENT_TYPE) + strlen(type)
@@ -213,12 +213,12 @@ void redis_request_handler(nxt_unit_request_info_t *req_info, int rc) {
 
   redisContext *c = redis_connect();
 
-  rc = redis_set(c, "hiredis", "its_alive");
+  rc = redis_set(c, (char *)"hiredis", (char *)"its_alive");
   if (rc == 1) {
     goto fail;
   }
 
-  rc = redis_get(c, "hiredis");
+  rc = redis_get(c, (char *)"hiredis");
 
 fail:
   nxt_unit_request_done(req_info, rc);

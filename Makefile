@@ -29,7 +29,7 @@ EXTRA_CFLAGS += -D_FORTIFY_SOURCE=2
 MODULE_CFLAGS = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
 endif
 
-MODULE_CFLAGS += $(arch)
+MODULE_CFLAGS += $(OPTIMIZATION) $(arch)
 
 linked_libs = -lc -lpthread -lssl -lcrypto -lcurl -lunit -lnaah64 -lhiredis -lhiredis_ssl
 
