@@ -14,7 +14,7 @@
 #include "request_handler.h"
 
 static int thread_count;
-static pthread_t *threads;
+static pthread_t *threads = NULL;
 
 static void *worker(void *main_ctx) {
   int rc;
@@ -22,14 +22,11 @@ static void *worker(void *main_ctx) {
 
   ctx = nxt_unit_ctx_alloc(main_ctx, NULL);
   if (ctx == NULL) {
-    return NULL;
+    return (void *)(intptr_t)NXT_UNIT_ERROR;
   }
 
-  nxt_unit_debug(ctx, "start worker");
-
+  nxt_unit_log(ctx, NXT_UNIT_LOG_INFO, "Starting worker");
   rc = nxt_unit_run(ctx);
-
-  nxt_unit_debug(ctx, "worker finished with %d code", rc);
 
   nxt_unit_done(ctx);
 
@@ -62,6 +59,7 @@ static int ready_handler(nxt_unit_ctx_t *ctx) {
 
 int main(int argc, char **argv) {
   int i, err;
+  void *thread_ret;
   nxt_unit_ctx_t *ctx;
   nxt_unit_init_t init;
 
@@ -78,16 +76,16 @@ int main(int argc, char **argv) {
 
   ctx = nxt_unit_init(&init);
   if (ctx == NULL) {
-    return 1;
+    return NXT_UNIT_ERROR;
   }
 
   err = nxt_unit_run(ctx);
 
   nxt_unit_debug(ctx, "main worker finished with %d code", err);
 
-  if (thread_count > 1) {
+  if ((threads != NULL) && (thread_count > 1)) {
     for (i = 0; i < thread_count - 1; i++) {
-      err = pthread_join(threads[i], NULL);
+      err = pthread_join(threads[i], &thread_ret);
 
       if (nxt_fast_path(err == 0)) {
         nxt_unit_debug(ctx, "join thread #%d", i);
@@ -97,6 +95,11 @@ int main(int argc, char **argv) {
             ctx, "pthread_join(#%d) failed: %s (%d)", i, strerror(err), err
         );
       }
+
+      nxt_unit_log(
+          ctx, NXT_UNIT_LOG_INFO, "Worker exited with code %" PRIiPTR,
+          (intptr_t)thread_ret
+      );
     }
     nxt_unit_free(ctx, threads);
   }
@@ -105,5 +108,5 @@ int main(int argc, char **argv) {
   nxt_unit_done(ctx);
   nxt_unit_debug(NULL, "main worker done");
 
-  return 0;
+  return NXT_UNIT_OK;
 }
