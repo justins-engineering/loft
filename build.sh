@@ -35,7 +35,7 @@ mv $dir/modules/vzw-nidd-front-end/build $dir/assets
 if [ $minsize ]; then
   docker build -t iots:dev --secret id=vzw_secrets.h,src=$dir/config/vzw_secrets.h -f $dir/Dockerfile.minsize $dir
 elif [ $debug ]; then
-  docker build -t iots:dev --secret id=vzw_secrets.h,src=$dir/config/vzw_secrets.h --build-arg debug=true $dir
+  docker build -t iots:dev --secret id=vzw_secrets.h,src=$dir/config/vzw_secrets.h --build-arg debug=true $dir 2>&1 | tee $dir/build.log
 else
   docker build -t iots:dev --secret id=vzw_secrets.h,src=$dir/config/vzw_secrets.h $dir
 fi
