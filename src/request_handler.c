@@ -25,6 +25,9 @@
 #define JSON_UTF8 "application/json; charset=utf-8"
 #define OCTET_STREAM "application/octet-stream;"
 
+#define REDIS_VZW_AUTH_KEY "VZW_AUTH_TOKEN"
+#define REDIS_VZW_M2M_KEY "VZW_M2M_TOKEN"
+
 static inline char *copy(char *p, const void *src, uint32_t len) {
   memcpy(p, src, len);
   return p + len;
@@ -79,7 +82,9 @@ static int response_init(
   return 0;
 }
 
-void vzw_request_handler(nxt_unit_request_info_t *req_info, int rc) {
+static void vzw_credentials_handler(
+    nxt_unit_request_info_t *req_info, int rc, redisContext *context
+) {
   char *p;
   nxt_unit_buf_t *buf;
 
@@ -94,6 +99,16 @@ void vzw_request_handler(nxt_unit_request_info_t *req_info, int rc) {
   rc = get_vzw_tokens(&vzw_auth_token[0], &vzw_m2m_token[0]);
   if (nxt_slow_path(rc != NXT_UNIT_OK)) {
     nxt_unit_req_error(req_info, "Failed to get VZW credentials");
+    goto fail;
+  }
+
+  rc = redis_set_ex(context, REDIS_VZW_AUTH_KEY, vzw_auth_token, "3600");
+  if (rc == 1) {
+    goto fail;
+  }
+
+  rc = redis_set_ex(context, REDIS_VZW_M2M_KEY, vzw_m2m_token, "1200");
+  if (rc == 1) {
     goto fail;
   }
 
@@ -123,7 +138,62 @@ fail:
   nxt_unit_request_done(req_info, rc);
 }
 
-void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) {
+void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *context) {
+  char *p;
+  nxt_unit_buf_t *buf;
+
+  char vzw_auth_token[50];
+  char vzw_m2m_token[50];
+
+  rc = response_init(req_info, rc, 200, TEXT_PLAIN_UTF8);
+  if (rc == 1) {
+    goto fail;
+  }
+
+  rc = redis_get(context, REDIS_VZW_AUTH_KEY, vzw_auth_token);
+  if (rc == 1) {
+    goto fail;
+  }
+
+  rc = redis_get(context, REDIS_VZW_M2M_KEY, vzw_m2m_token);
+  if (rc == 1) {
+    goto fail;
+  }
+
+  rc = send_nidd_data(
+      vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400", (char *)"Hello world!\n"
+  );
+  if (rc == 1) {
+    goto fail;
+  }
+
+  buf = nxt_unit_response_buf_alloc(
+      req_info,
+      ((req_info->request_buf->end - req_info->request_buf->start) + strlen("Hello world!\n"))
+  );
+  if (nxt_slow_path(buf == NULL)) {
+    rc = NXT_UNIT_ERROR;
+    nxt_unit_req_error(req_info, "Failed to allocate response buffer");
+    goto fail;
+  }
+
+  p = buf->free;
+
+  p = copy(p, "Hello world!", strlen("Hello world!"));
+  *p++ = '\n';
+
+  buf->free = p;
+  rc = nxt_unit_buf_send(buf);
+  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+    nxt_unit_req_error(req_info, "Failed to send buffer");
+    goto fail;
+  }
+
+fail:
+  nxt_unit_request_done(req_info, rc);
+}
+
+static void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) {
   char *p;
   nxt_unit_buf_t *buf;
   struct stat file_info;
@@ -205,45 +275,33 @@ fail:
   nxt_unit_request_done(req_info, rc);
 }
 
-void redis_request_handler(nxt_unit_request_info_t *req_info, int rc) {
-  rc = response_init(req_info, rc, 200, TEXT_PLAIN_UTF8);
-  if (rc == 1) {
-    goto fail;
-  }
-
-  redisContext *c = redis_connect();
-
-  rc = redis_set(c, (char *)"hiredis", (char *)"its_alive");
-  if (rc == 1) {
-    goto fail;
-  }
-
-  rc = redis_get(c, (char *)"hiredis");
-
-fail:
-  nxt_unit_request_done(req_info, rc);
-}
-
 void request_router(nxt_unit_request_info_t *req_info) {
   int rc = 0;
   nxt_unit_sptr_t *rp = &req_info->request->path;
 
-  void *path = nxt_unit_sptr_get(rp);
+  char *path = nxt_unit_sptr_get(rp);
 
   if (strncmp(path, "/vzw", 4) == 0) {
-    (void)vzw_request_handler(req_info, rc);
+    redisContext *c = redis_connect();
+    if ((strncmp(path + 4, "/credentials", 12) == 0)) {
+      (void)vzw_credentials_handler(req_info, rc, c);
+      goto end;
+    } else if ((strncmp(path + 4, "/nidd", 5) == 0)) {
+      (void)vzw_send_nidd(req_info, rc, c);
+    }
+    (void)redisFree(c);
+    goto end;
   } else if ((strncmp(path, "/firmware", 9) == 0)) {
     (void)firmware_request_handler(req_info, rc);
-  } else if ((strncmp(path, "/db", 3) == 0)) {
-    (void)redis_request_handler(req_info, rc);
-  } else {
-    response_init(req_info, rc, 404, TEXT_PLAIN_UTF8);
-    if (rc == 1) {
-      goto fail;
-    }
-    nxt_unit_response_write(req_info, "Error 404", sizeof("Error 404") - 1);
+    goto end;
   }
 
-fail:
+  response_init(req_info, rc, 404, TEXT_PLAIN_UTF8);
+  if (rc == 1) {
+    goto end;
+  }
+  nxt_unit_response_write(req_info, "Error 404", sizeof("Error 404") - 1);
+
+end:
   nxt_unit_request_done(req_info, rc);
 }

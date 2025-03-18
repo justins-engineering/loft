@@ -24,4 +24,6 @@ int get_vzw_m2m_token(
     const char *username, const char *password, const char *vzw_auth_token,
     char *vzw_m2m_token
 );
+
+int send_nidd_data(char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *mdt, char *message);
 #endif

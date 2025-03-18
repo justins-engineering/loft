@@ -7,6 +7,7 @@
 #include <hiredis/hiredis.h>
 
 redisContext *redis_connect(void);
-int redis_set(redisContext *context, char *key, char *value);
-int redis_get(redisContext *context, char *key);
+int redis_set(redisContext *context, const char *key, char *value);
+int redis_set_ex(redisContext *context, const char *key, char *value, const char *ttl);
+int redis_get(redisContext *context, const char *key, char *value);
 #endif
