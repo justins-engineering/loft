@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "curl_callbacks.h"
+#include "../curl_callbacks.h"
 
 #define REPO "umts/embedded-departure-board"
 #define RELEASES_URL "https://github.com/" REPO "/releases/"
@@ -27,9 +27,7 @@ static void parse_tag(char *headers, char *tag) {
   *(tag + tag_size) = '\0';
 }
 
-static CURLcode latest_firmware_tag(
-    CURL *curl, RecvData *header_data, char *latest_tag
-) {
+static CURLcode latest_firmware_tag(CURL *curl, RecvData *header_data, char *latest_tag) {
   CURLcode res;
 
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
@@ -66,8 +64,7 @@ int download_firmware_github(FILE **fptr) {
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(
-      curl, CURLOPT_USERAGENT,
-      strcat(user_agent, curl_version_info(CURLVERSION_NOW)->version)
+      curl, CURLOPT_USERAGENT, strcat(user_agent, curl_version_info(CURLVERSION_NOW)->version)
   );
   curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
@@ -76,9 +73,7 @@ int download_firmware_github(FILE **fptr) {
     goto cleanup;
   }
 
-  char filename
-      [sizeof(APP_UPDATE_DIR) + sizeof(latest_tag) +
-       sizeof(APP_UPDATE_NAME_PARTIAL) - 2];
+  char filename[sizeof(APP_UPDATE_DIR) + sizeof(latest_tag) + sizeof(APP_UPDATE_NAME_PARTIAL) - 2];
 
   p = stpcpy(filename, APP_UPDATE_DIR);
   p = stpcpy(p, latest_tag);

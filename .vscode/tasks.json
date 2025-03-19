@@ -26,15 +26,15 @@
         "-p",
         "80:80",
         "--name",
-        "iots_dev",
-        "iots:dev"
+        "loft_dev",
+        "loft:dev"
       ],
       "options": {},
       "group": {
         "kind": "test",
         "isDefault": true
       },
-      "detail": "docker image prune & run niddss:dev",
+      "detail": "docker image prune & run loft:dev",
       "problemMatcher": []
     },
     {

@@ -16,9 +16,9 @@
 #include <sys/stat.h>
 
 #include "../config/vzw_secrets.h"
-#include "firmware_requests.h"
-#include "redis_connect.h"
-#include "vzw_connect.h"
+#include "db/redis_connect.h"
+#include "firmware/firmware_requests.h"
+#include "vzw/vzw_connect.h"
 
 #define CONTENT_TYPE "Content-Type"
 #define TEXT_HTML_UTF8 "text/html; charset=utf-8"

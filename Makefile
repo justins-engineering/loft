@@ -2,10 +2,12 @@ CC ?= gcc
 DIR ?= .
 EXTRA_CFLAGS ?=
 EXTRA_LDFLAGS ?=
-
 INSTALL ?= cp -pPR
+
+INSTALL_BIN_PATH ?= /usr/bin
 INSTALL_INCLUDE_PATH = $(DIR)/include
 INSTALL_LIBRARY_PATH = $(DIR)/lib
+SRC_PATH = $(DIR)/src
 MODULE_PATH = $(DIR)/modules
 
 OPTIMIZATION ?= -O3
@@ -36,9 +38,9 @@ linked_libs = -lc -lpthread -lssl -lcrypto -lcurl -lunit -lnaah64 -lhiredis -lhi
 CFLAGS += $(OPTIMIZATION) -fPIC $(WARNINGS) $(EXTRA_CFLAGS) $(arch) -I$(INSTALL_INCLUDE_PATH)
 LDFLAGS += -L$(DIR) -L$(INSTALL_LIBRARY_PATH) $(linked_libs) $(EXTRA_LDFLAGS)
 
-VPATH = $(DIR)/src:$(INSTALL_INCLUDE_PATH)
+subdirs= $(addprefix $(SRC_PATH), /db /firmware /json /vzw)
 
-app_bin_dir ?= /usr/bin
+VPATH = $(SRC_PATH) $(subdirs) $(INSTALL_INCLUDE_PATH)
 
 objects = main.o jsmn.o json_helpers.o curl_callbacks.o vzw_connect.o request_handler.o \
 	firmware_requests.o redis_connect.o
@@ -76,7 +78,7 @@ app: config/vzw_secrets.h $(addprefix $(INSTALL_INCLUDE_PATH)/, jsmn.h base64.h 
 	chmod +x $(DIR)/app
 
 install: app
-	cp $(DIR)/app $(app_bin_dir)/iots
+	cp $(DIR)/app $(INSTALL_BIN_PATH)/loft
 
 # This shouldn't depend on phony targets but they're order-only and it works for now
 %.o: %.c | libnaah64.a libhiredis.a libhiredis_ssl.a

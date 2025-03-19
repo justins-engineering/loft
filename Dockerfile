@@ -2,11 +2,10 @@
 
 FROM debian:stable-slim
 
-LABEL org.opencontainers.image.title="Unit (C)"
-LABEL org.opencontainers.image.description="Unofficial build of Unit for Docker."
-LABEL org.opencontainers.image.url="https://github.com/bandogora/nunit-Ceasy"
-LABEL org.opencontainers.image.source="https://github.com/bandogora/nunit-Ceasy"
-LABEL org.opencontainers.image.documentation="https://unit.nginx.org/installation/#docker-images"
+LABEL org.opencontainers.image.title="Loft"
+LABEL org.opencontainers.image.description="A middleware server based on NGIX Unit that exchanges data between IoT devices and Verizon Thingspace"
+LABEL org.opencontainers.image.url="https://github.com/justins-engineering/loft"
+LABEL org.opencontainers.image.source="https://github.com/justins-engineering/loft"
 
 # NGINX Unit URL and version
 ARG nginx_unit_link="https://github.com/nginx/unit"
@@ -24,6 +23,7 @@ ARG debug_unit=false
 
 ARG prefix="/usr"
 ARG exec_prefix="$prefix"
+ARG src_dir="$exec_prefix/src"
 ARG bin_dir="$exec_prefix/bin"
 ARG include_dir="$prefix/include"
 ARG lib_dir="$exec_prefix/lib"
@@ -36,17 +36,16 @@ ARG log_file="$log_dir/unit.log"
 ARG tmp_dir="/tmp"
 ARG unit_group="unit"
 ARG unit_user="unit"
-ARG unit_clone_dir="$prefix/src/unit"
+ARG unit_clone_dir="$src_dir/unit"
 
 ARG srv_dir="/srv"
 ARG app_assets_dir="$srv_dir/assets"
-ARG app_bin_dir="$bin_dir"
-ARG app_clone_dir="$prefix/src/app"
+ARG app_clone_dir="$src_dir/loft"
 ARG app_src_dir="$app_clone_dir/src"
 ARG app_include_dir="$app_clone_dir/include"
 ARG app_lib_dir="$app_clone_dir/lib"
-ARG app_group="iots"
-ARG app_user="iots"
+ARG app_group="loft"
+ARG app_user="loft"
 ARG app_firmware_dir="$srv_dir/firmware"
 
 ARG ncpu="getconf _NPROCESSORS_ONLN"
@@ -101,7 +100,7 @@ RUN set -ex \
   && mkdir -p \
     $bin_dir \
     $UNIT_SBIN_DIR \
-    $include_dir/hiredis/adapters \
+    $include_dir \
     $lib_dir \
     $data_root_dir \
     $man_dir \
@@ -110,19 +109,10 @@ RUN set -ex \
     $log_dir \
     $UNIT_RUN_STATE_DIR \
     $tmp_dir \
-    $app_src_dir \
     $app_include_dir \
     $app_lib_dir \
     $app_clone_dir/config \
-    $app_clone_dir/modules/hiredis/adapters \
-    $app_clone_dir/modules/hiredis/include/hiredis \
-    $app_clone_dir/modules/hiredis/lib \
-    $app_clone_dir/modules/jsmn \
-    $app_clone_dir/modules/nibble-and-a-half \
     $app_firmware_dir \
-    $app_assets_dir/images \
-    $app_assets_dir/javascripts \
-    $app_assets_dir/stylesheets \
     /docker-entrypoint.d \
   && mkdir -p -m=700 $lib_state_dir \
   && groupadd --gid 999 $unit_group \
@@ -140,7 +130,7 @@ RUN set -ex \
        --gid $app_group \
        --no-create-home \
        --home /nonexistent \
-       --comment "iot server app user" \
+       --comment "loft server user" \
        --shell /bin/false \
        $app_user \
   && chown root:$app_group $app_firmware_dir \
@@ -181,7 +171,7 @@ RUN set -ex \
   && ln -sf /dev/stdout "$log_file" \
   && make -j $(eval $ncpu) libunit-install \
 # Add nxt_clang.h to include location
-  && cp ./src/nxt_clang.h $include_dir/.
+  && cp ./src/nxt_clang.h "$app_include_dir"
 
 # Save/apt-mark unitd dependencies
 RUN set -ex \
@@ -200,35 +190,28 @@ RUN set -ex \
 WORKDIR $app_clone_dir
 
 # Copy module source files
-COPY --link ./modules/hiredis/* "$app_clone_dir"/modules/hiredis
-COPY --link ./modules/hiredis/adapters/* "$app_clone_dir"/modules/hiredis/adapters
-COPY --link ./modules/jsmn/* "$app_clone_dir"/modules/jsmn
-COPY --link ./modules/nibble-and-a-half/* "$app_clone_dir"/modules/nibble-and-a-half
+COPY --link ./modules/ "$app_clone_dir"/modules
 
 # Copy app source files
-COPY --link ./src/* "$app_src_dir"
-COPY --link ./include/*.h "$app_include_dir"
+COPY --link ./src/ "$app_src_dir"
+COPY --link ./include/config.h "$app_include_dir"
 COPY --link ./Makefile "$app_clone_dir"
 
 # Copy app assets
-COPY --link ./assets/*.html "$app_assets_dir"
-COPY --link ./assets/images/* "$app_assets_dir/images"
-COPY --link ./assets/javascripts/* "$app_assets_dir/javascripts"
-COPY --link ./assets/stylesheets/* "$app_assets_dir/stylesheets"
+COPY --link ./assets/ "$app_assets_dir"
 
-RUN --mount=type=secret,id=vzw_secrets.h set -x \
-  && cp /run/secrets/vzw_secrets.h config/vzw_secrets.h
+RUN --mount=type=secret,id=vzw_secrets.h set -ex \
+  && cp /run/secrets/vzw_secrets.h "$app_clone_dir"/config/vzw_secrets.h
 
-# Compile and link C app against libunit.a
-RUN set -x \
+# Compile and link Loft
+RUN set -ex \
   && if [ "$debug" = "true" ]; \
     then make -j $(eval $ncpu) CC=gcc DEBUG=1 EXTRA_CFLAGS=-fsanitize=address\ -static-libasan EXTRA_LDFLAGS=-fsanitize=address; \
-    else make -j $(eval $ncpu) CC=gcc; \
+    else make -j $(eval $ncpu) CC=gcc EXTRA_CFLAGS=-std=gnu2x; \
   fi \
-  && make install \
-  && rm -f config/vzw_secrets.h \
+  && make install INSTALL_BIN_PATH="$bin_dir" \
+  && rm -rf "$src_dir" \
   && apt-get purge -y --auto-remove build-essential \
-  && rm -rf /usr/src/* \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /requirements.apt
 

@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include "../config/vzw_secrets.h"
-#include "json_helpers.h"
+#include "../json/json_helpers.h"
 
 #define CONTENT_TYPE_JSON "Content-Type:application/json"
 #define ACCEPT_JSON "Accept:application/json"
@@ -26,9 +26,7 @@ static int extract_token(const char *src, char *dst, const char *token) {
 
   (void)jsmn_init(&p);
 
-  const int ret = jsmn_parse(
-      &p, src, strlen(src), tokens, sizeof(tokens) / sizeof(jsmntok_t)
-  );
+  const int ret = jsmn_parse(&p, src, strlen(src), tokens, sizeof(tokens) / sizeof(jsmntok_t));
 
   if (eval_jsmn_return(ret)) {
     return 1;
@@ -38,8 +36,7 @@ static int extract_token(const char *src, char *dst, const char *token) {
     size_t token_len = (size_t)(tokens[t + 1].end - tokens[t + 1].start);
     if (jsoneq(src, &tokens[t], token)) {
       memcpy((void *)dst, (void *)(src + tokens[t + 1].start), token_len);
-    } else if (jsoneq(src, &tokens[t], "error") ||
-        jsoneq(src, &tokens[t], "errorCode")) {
+    } else if (jsoneq(src, &tokens[t], "error") || jsoneq(src, &tokens[t], "errorCode")) {
       PRINTERR(
           "Error \"%.*s\": %.*s", tokens[t + 1].end - tokens[t + 1].start,
           src + tokens[t + 1].start, tokens[t + 3].end - tokens[t + 3].start,
@@ -72,9 +69,7 @@ int get_vzw_auth_token(const char *vzw_auth_keys, char *vzw_auth_token) {
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
-  curl_easy_setopt(
-      curl, CURLOPT_URL, "https://thingspace.verizon.com/api/ts/v1/oauth2/token"
-  );
+  curl_easy_setopt(curl, CURLOPT_URL, "https://thingspace.verizon.com/api/ts/v1/oauth2/token");
 
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, heap_mem_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
@@ -85,9 +80,7 @@ int get_vzw_auth_token(const char *vzw_auth_keys, char *vzw_auth_token) {
   (void)base64(vzw_auth_keys, strlen(vzw_auth_keys), ptr);
 
   headers = curl_slist_append(headers, ACCEPT_JSON);
-  headers = curl_slist_append(
-      headers, "Content-Type: application/x-www-form-urlencoded"
-  );
+  headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
   headers = curl_slist_append(headers, auth_token_field);
 
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -121,8 +114,7 @@ fail:
   sizeof(USERNAME_FIELD) + sizeof(PASSWORD_FIELD) + sizeof(VZW_USERNAME) + sizeof(VZW_PASSWORD)
 
 int get_vzw_m2m_token(
-    const char *username, const char *password, const char *vzw_auth_token,
-    char *vzw_m2m_token
+    const char *username, const char *password, const char *vzw_auth_token, char *vzw_m2m_token
 ) {
   char *ptr;
   CURL *curl = curl_easy_init();
@@ -147,10 +139,7 @@ int get_vzw_m2m_token(
   headers = curl_slist_append(headers, ACCEPT_JSON);
   headers = curl_slist_append(headers, access_token_field);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(
-      curl, CURLOPT_URL,
-      "https://thingspace.verizon.com/api/m2m/v1/session/login"
-  );
+  curl_easy_setopt(curl, CURLOPT_URL, "https://thingspace.verizon.com/api/m2m/v1/session/login");
 
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, heap_mem_write_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_data);
@@ -227,7 +216,7 @@ int send_nidd_data(
   curl_easy_setopt(curl, CURLOPT_POST, 1L);
   curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+  // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
   ptr = stpcpy(access_token_field, ACCESS_TOKEN_FIELD);
   (void)stpcpy(ptr, vzw_auth_token);

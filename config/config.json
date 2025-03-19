@@ -16,7 +16,7 @@
         ]
       },
       "action": {
-        "pass": "applications/iots"
+        "pass": "applications/loft"
       }
     },
     {
@@ -29,11 +29,11 @@
     }
   ],
   "applications": {
-    "iots": {
+    "loft": {
       "type": "external",
       "working_directory": "/srv",
-      "executable": "/usr/bin/iots",
-      "user": "iots"
+      "executable": "/usr/bin/loft",
+      "user": "loft"
     }
   }
 }

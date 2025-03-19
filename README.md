@@ -1,5 +1,5 @@
-# Nidd Sign Server
-A middleware server Docker Image based on [NGIX Unit](https://unit.nginx.org/) that transforms and exchanges data between an [IoT device](https://docs.circuitdojo.com/nrf9160-introduction.html) and Verizon Thingspace using Verizon's [ThingSpace Connectivity Management API](https://thingspace.verizon.com/documentation/apis/connectivity-management/working-with-verizon/about-non-ip-data-delivery.html).
+# Loft
+A middleware server and Docker Image based on [NGIX Unit](https://unit.nginx.org/) that exchanges data between [IoT devices](https://docs.circuitdojo.com/nrf9160-introduction.html) and Verizon Thingspace using Verizon's [ThingSpace Connectivity Management API](https://thingspace.verizon.com/documentation/apis/connectivity-management/working-with-verizon/about-non-ip-data-delivery.html).
 
 ## Development
 
@@ -24,7 +24,7 @@ This script inits, updates, and resets the git submodules. It then runs `bundle 
 ```
 #### `build.sh` Flags:
 - `p`: prune Docker containers, images, and buildx cache after build
-- `r`: runs the docker container after building with the options `--rm -p 8081:80 --name niddss_dev`
+- `r`: runs the docker container after building with the options `--rm -p 80:80 --name loft_dev`
 - `d`: Adds the docker build option `--build-arg debug=true`
   - Adds vim to the built image
   - Adds the aliases `ls='ls -F --color=auto'` & `grep='grep -nI --color=auto'` to `/root/.bashrc`
@@ -33,11 +33,11 @@ This script inits, updates, and resets the git submodules. It then runs `bundle 
 
 ### Running
 ```sh
-docker run --rm -p 8081:80 --name niddss_dev niddss:dev
+docker run --rm -p 80:80 --name loft_dev loft:dev
 ```
-The server will be viewable at http://localhost:8081
+The server will be viewable at http://localhost:80
 
 ### Docker container shell
 ```sh
-docker exec -it niddss_dev /bin/bash
+docker exec -it loft_dev /bin/bash
 ```
