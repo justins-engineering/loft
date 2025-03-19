@@ -11,6 +11,7 @@
 #include <nxt_unit.h>
 #include <nxt_unit_sptr.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -31,27 +32,6 @@
 static inline char *copy(char *p, const void *src, uint32_t len) {
   memcpy(p, src, len);
   return p + len;
-}
-
-static int get_vzw_tokens(char *vzw_auth_token, char *vzw_m2m_token) {
-  int rc = 0;
-
-  rc = get_vzw_auth_token(VZW_PUBLIC_KEY ":" VZW_PRIVATE_KEY, vzw_auth_token);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
-    goto fail;
-  }
-  PRINTDBG("auth token: %s", vzw_auth_token);
-
-  rc = get_vzw_m2m_token(
-      VZW_USERNAME, VZW_PASSWORD, vzw_auth_token, vzw_m2m_token
-  );
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
-    goto fail;
-  }
-  PRINTDBG("m2m token: %s", vzw_m2m_token);
-
-fail:
-  return rc;
 }
 
 static int response_init(
@@ -82,94 +62,73 @@ static int response_init(
   return 0;
 }
 
-static void vzw_credentials_handler(
-    nxt_unit_request_info_t *req_info, int rc, redisContext *context
+static int vzw_credentials_handler(
+    redisContext *context, char *vzw_auth_token, char *vzw_m2m_token
 ) {
-  char *p;
-  nxt_unit_buf_t *buf;
-
-  char vzw_auth_token[50] = "\0";
-  char vzw_m2m_token[50] = "\0";
-
-  rc = response_init(req_info, rc, 200, TEXT_PLAIN_UTF8);
-  if (rc == 1) {
-    goto fail;
+  int rc = redis_get(context, REDIS_VZW_AUTH_KEY, vzw_auth_token);
+  if (rc) {
+    return 1;
   }
 
-  rc = get_vzw_tokens(&vzw_auth_token[0], &vzw_m2m_token[0]);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
-    nxt_unit_req_error(req_info, "Failed to get VZW credentials");
-    goto fail;
+  if (*vzw_auth_token == '\0') {
+    rc = get_vzw_auth_token(VZW_PUBLIC_KEY ":" VZW_PRIVATE_KEY, vzw_auth_token);
+    if (rc) {
+      return 1;
+    }
+
+    rc = redis_set_ex(context, REDIS_VZW_AUTH_KEY, vzw_auth_token, "3600");
+    if (rc) {
+      return 1;
+    }
   }
 
-  rc = redis_set_ex(context, REDIS_VZW_AUTH_KEY, vzw_auth_token, "3600");
-  if (rc == 1) {
-    goto fail;
+  rc = redis_get(context, REDIS_VZW_M2M_KEY, vzw_m2m_token);
+  if (rc) {
+    return 1;
   }
 
-  rc = redis_set_ex(context, REDIS_VZW_M2M_KEY, vzw_m2m_token, "1200");
-  if (rc == 1) {
-    goto fail;
+  if (*vzw_m2m_token == '\0') {
+    rc = get_vzw_m2m_token(VZW_USERNAME, VZW_PASSWORD, vzw_auth_token, vzw_m2m_token);
+    if (rc) {
+      return 1;
+    }
+
+    rc = redis_set_ex(context, REDIS_VZW_M2M_KEY, vzw_m2m_token, "1200");
+    if (rc) {
+      return 1;
+    }
   }
 
-  buf = nxt_unit_response_buf_alloc(
-      req_info, ((req_info->request_buf->end - req_info->request_buf->start) +
-                 strlen("Hello world!\n"))
-  );
-  if (nxt_slow_path(buf == NULL)) {
-    rc = NXT_UNIT_ERROR;
-    nxt_unit_req_error(req_info, "Failed to allocate response buffer");
-    goto fail;
-  }
-
-  p = buf->free;
-
-  p = copy(p, "Hello world!", strlen("Hello world!"));
-  *p++ = '\n';
-
-  buf->free = p;
-  rc = nxt_unit_buf_send(buf);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
-    nxt_unit_req_error(req_info, "Failed to send buffer");
-    goto fail;
-  }
-
-fail:
-  nxt_unit_request_done(req_info, rc);
+  return 0;
 }
 
 void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *context) {
-  char *p;
   nxt_unit_buf_t *buf;
+  RecvData response_data = {NULL, 0};
+
+  rc = response_init(req_info, rc, 202, JSON_UTF8);
+  if (rc == 1) {
+    goto fail;
+  }
 
   char vzw_auth_token[50];
   char vzw_m2m_token[50];
 
-  rc = response_init(req_info, rc, 200, TEXT_PLAIN_UTF8);
-  if (rc == 1) {
-    goto fail;
-  }
-
-  rc = redis_get(context, REDIS_VZW_AUTH_KEY, vzw_auth_token);
-  if (rc == 1) {
-    goto fail;
-  }
-
-  rc = redis_get(context, REDIS_VZW_M2M_KEY, vzw_m2m_token);
+  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
   if (rc == 1) {
     goto fail;
   }
 
   rc = send_nidd_data(
-      vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400", (char *)"Hello world!\n"
+      vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400", (char *)"Hello world!\n",
+      &response_data
   );
   if (rc == 1) {
     goto fail;
   }
 
   buf = nxt_unit_response_buf_alloc(
-      req_info,
-      ((req_info->request_buf->end - req_info->request_buf->start) + strlen("Hello world!\n"))
+      req_info, ((req_info->request_buf->end - req_info->request_buf->start) + response_data.size)
   );
   if (nxt_slow_path(buf == NULL)) {
     rc = NXT_UNIT_ERROR;
@@ -177,12 +136,8 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
     goto fail;
   }
 
-  p = buf->free;
+  buf->free = mempcpy(buf->free, response_data.response, response_data.size);
 
-  p = copy(p, "Hello world!", strlen("Hello world!"));
-  *p++ = '\n';
-
-  buf->free = p;
   rc = nxt_unit_buf_send(buf);
   if (nxt_slow_path(rc != NXT_UNIT_OK)) {
     nxt_unit_req_error(req_info, "Failed to send buffer");
@@ -190,6 +145,7 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
   }
 
 fail:
+  free(response_data.response);
   nxt_unit_request_done(req_info, rc);
 }
 
@@ -283,10 +239,7 @@ void request_router(nxt_unit_request_info_t *req_info) {
 
   if (strncmp(path, "/vzw", 4) == 0) {
     redisContext *c = redis_connect();
-    if ((strncmp(path + 4, "/credentials", 12) == 0)) {
-      (void)vzw_credentials_handler(req_info, rc, c);
-      goto end;
-    } else if ((strncmp(path + 4, "/nidd", 5) == 0)) {
+    if ((strncmp(path + 4, "/nidd", 5) == 0)) {
       (void)vzw_send_nidd(req_info, rc, c);
     }
     (void)redisFree(c);

@@ -14,7 +14,6 @@
 #include <string.h>
 
 #include "../config/vzw_secrets.h"
-#include "curl_callbacks.h"
 #include "json_helpers.h"
 
 #define CONTENT_TYPE_JSON "Content-Type:application/json"
@@ -205,13 +204,15 @@ fail:
   sizeof(DEVICE_ID_FIELD_START) + sizeof(DEVICE_ID_FIELD_END) + sizeof(ACCOUNT_NAME_FIELD) + \
       sizeof(MDT_FIELD) + sizeof(MESSAGE_FIELD) + MDN_SIZE + MAX_MDT_SIZE + MAX_MESSAGE_SIZE
 
-int send_nidd_data(char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *mdt, char *message) {
+int send_nidd_data(
+    char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *mdt, char *message,
+    RecvData *response_data
+) {
   char *ptr;
   CURL *curl = curl_easy_init();
   CURLcode res;
   struct curl_slist *headers = NULL;
   RecvData header_data = {NULL, 0};
-  RecvData response_data = {NULL, 0};
 
   if (BASE64LEN(strlen(message)) > MAX_MESSAGE_SIZE) {
     PRINTERR("NIDD message length too large");
@@ -247,7 +248,7 @@ int send_nidd_data(char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *m
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, heap_mem_write_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_data);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, heap_mem_write_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, response_data);
 
   post_field[0] = '{';
   ptr = stpcpy(&post_field[1], DEVICE_ID_FIELD_START);
@@ -269,11 +270,8 @@ int send_nidd_data(char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *m
     goto fail;
   }
 
-  PRINTDBG("%s", response_data.response);
-
 fail:
   free(header_data.response);
-  free(response_data.response);
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
 

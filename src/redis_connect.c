@@ -61,7 +61,11 @@ int redis_get(redisContext *context, const char *key, char *value) {
     return 1;
   }
 
-  (void)memcpy(value, reply->str, reply->len);
+  if (reply->str == NULL) {
+    *value = '\0';
+  } else {
+    (void)memcpy(value, reply->str, reply->len);
+  }
 
   PRINTSUCCES("GET %s: %s", key, reply->str);
   freeReplyObject(reply);
