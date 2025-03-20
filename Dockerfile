@@ -71,7 +71,7 @@ ARG unit_config_args=\
 --sbindir=$UNIT_SBIN_DIR \
 --includedir=$include_dir \
 --libdir=$lib_dir \
---modulesdir=$modules_dir \
+--modulesdir=$lib_dir/modules \
 --datarootdir=$data_root_dir \
 --mandir=$man_dir \
 --localstatedir=$local_state_dir \
@@ -118,21 +118,21 @@ RUN set -ex \
   && groupadd --gid 999 $unit_group \
   && groupadd --gid 1000 $app_group \
   && useradd \
-       --uid 999 \
-       --gid $unit_group \
-       --no-create-home \
-       --home /nonexistent \
-       --comment "unit user" \
-       --shell /bin/false \
-       $unit_user \
+    --uid 999 \
+    --gid $unit_group \
+    --no-create-home \
+    --home /nonexistent \
+    --comment "unit user" \
+    --shell /bin/false \
+    $unit_user \
   && useradd \
-       --uid 1000 \
-       --gid $app_group \
-       --no-create-home \
-       --home /nonexistent \
-       --comment "loft server user" \
-       --shell /bin/false \
-       $app_user \
+    --uid 1000 \
+    --gid $app_group \
+    --no-create-home \
+    --home /nonexistent \
+    --comment "loft server user" \
+    --shell /bin/false \
+    $app_user \
   && chown root:$app_group $app_firmware_dir \
   && chmod -R 775 $app_firmware_dir
 
@@ -176,8 +176,8 @@ RUN set -ex \
   && cd \
   && savedAptMark="$(apt-mark showmanual)" \
   && for f in $UNIT_SBIN_DIR/unitd; do \
-      ldd $f | awk '/=>/{print $(NF-1)}' | while read n; do dpkg-query -S $n; done | sed 's/^\([^:]\+\):.*$/\1/' | sort | uniq >> /requirements.apt; \
-     done \
+    ldd $f | awk '/=>/{print $(NF-1)}' | while read n; do dpkg-query -S $n; done | sed 's/^\([^:]\+\):.*$/\1/' | sort | uniq >> /requirements.apt; \
+    done \
   && apt-mark showmanual | xargs apt-mark auto > /dev/null \
   && { [ -z "$savedAptMark" ] || apt-mark manual $savedAptMark; } \
   && /bin/true \
