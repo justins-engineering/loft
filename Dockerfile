@@ -169,9 +169,7 @@ RUN set -ex \
   && make -j $(eval $ncpu) unitd \
   && install -pm755 ./build/sbin/unitd "$UNIT_SBIN_DIR/unitd" \
   && ln -sf /dev/stdout "$log_file" \
-  && make -j $(eval $ncpu) libunit-install \
-# Add nxt_clang.h to include location
-  && cp ./src/nxt_clang.h "$app_include_dir"
+  && make -j $(eval $ncpu) libunit-install
 
 # Save/apt-mark unitd dependencies
 RUN set -ex \

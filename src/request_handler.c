@@ -7,7 +7,6 @@
 #define JSMN_HEADER
 
 #include <config.h>
-#include <nxt_clang.h>
 #include <nxt_unit.h>
 #include <nxt_unit_sptr.h>
 #include <stdio.h>
@@ -37,24 +36,22 @@ static inline char *copy(char *p, const void *src, uint32_t len) {
 static int response_init(
     nxt_unit_request_info_t *req_info, int rc, uint16_t status, const char *type
 ) {
-  rc = nxt_unit_response_init(
-      req_info, status, 1, nxt_length(CONTENT_TYPE) + strlen(type)
-  );
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+  rc = nxt_unit_response_init(req_info, status, 1, sizeof(CONTENT_TYPE) - 1 + strlen(type));
+  if (rc) {
     nxt_unit_req_error(req_info, "Failed to initialize response");
     return 1;
   }
 
   rc = nxt_unit_response_add_field(
-      req_info, CONTENT_TYPE, nxt_length(CONTENT_TYPE), type, strlen(type)
+      req_info, CONTENT_TYPE, sizeof(CONTENT_TYPE) - 1, type, strlen(type)
   );
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+  if (rc) {
     nxt_unit_req_error(req_info, "Failed to add field to response");
     return 1;
   }
 
   rc = nxt_unit_response_send(req_info);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+  if (rc) {
     nxt_unit_req_error(req_info, "Failed to send response headers");
     return 1;
   }
@@ -130,7 +127,7 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
   buf = nxt_unit_response_buf_alloc(
       req_info, ((req_info->request_buf->end - req_info->request_buf->start) + response_data.size)
   );
-  if (nxt_slow_path(buf == NULL)) {
+  if (buf == NULL) {
     rc = NXT_UNIT_ERROR;
     nxt_unit_req_error(req_info, "Failed to allocate response buffer");
     goto fail;
@@ -139,7 +136,7 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
   buf->free = mempcpy(buf->free, response_data.response, response_data.size);
 
   rc = nxt_unit_buf_send(buf);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+  if (rc) {
     nxt_unit_req_error(req_info, "Failed to send buffer");
     goto fail;
   }
@@ -162,7 +159,7 @@ static void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) 
   }
 
   rc = download_firmware_github(&fptr);
-  if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+  if (rc) {
     nxt_unit_req_error(req_info, "Failed to get latest firmware from GitHub");
     goto fail;
   }
@@ -191,7 +188,7 @@ static void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) 
   PRINTDBG("Sending firmware...");
   for (size_t i = 0; i < io_blocks; i++) {
     buf = nxt_unit_response_buf_alloc(req_info, (file_info.st_blksize));
-    if (nxt_slow_path(buf == NULL)) {
+    if (buf == NULL) {
       rc = NXT_UNIT_ERROR;
       PRINTERR("Failed to allocate response buffer");
       goto fail;
@@ -217,7 +214,7 @@ static void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) 
     }
 
     rc = nxt_unit_buf_send(buf);
-    if (nxt_slow_path(rc != NXT_UNIT_OK)) {
+    if (rc) {
       PRINTERR("Failed to send buffer");
       goto fail;
     }

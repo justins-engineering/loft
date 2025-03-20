@@ -4,7 +4,6 @@
  */
 
 #include <curl/curl.h>
-#include <nxt_clang.h>
 #include <nxt_unit.h>
 #include <nxt_unit_request.h>
 #include <pthread.h>
@@ -87,7 +86,7 @@ int main(int argc, char **argv) {
     for (i = 0; i < thread_count - 1; i++) {
       err = pthread_join(threads[i], &thread_ret);
 
-      if (nxt_fast_path(err == 0)) {
+      if (!err) {
         nxt_unit_debug(ctx, "join thread #%d", i);
 
       } else {
