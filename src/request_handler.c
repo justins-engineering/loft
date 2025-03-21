@@ -146,6 +146,29 @@ fail:
   nxt_unit_request_done(req_info, rc);
 }
 
+void vzw_callback(nxt_unit_request_info_t *req_info, int rc, redisContext *context) {
+  uint64_t buf_len;
+  char *read_buf;
+
+  rc = nxt_unit_response_init(req_info, 204, 0, 0);
+  if (rc) {
+    nxt_unit_req_error(req_info, "Failed to initialize response");
+  }
+
+  rc = nxt_unit_response_send(req_info);
+  if (rc) {
+    nxt_unit_req_error(req_info, "Failed to send response headers");
+  }
+
+  buf_len = req_info->request->content_length;
+  read_buf = malloc(buf_len);
+  (void)nxt_unit_request_read(req_info, read_buf, buf_len);
+
+  nxt_unit_request_done(req_info, rc);
+  PRINTDBG("\n%s\n", read_buf);
+  free(read_buf);
+}
+
 static void firmware_request_handler(nxt_unit_request_info_t *req_info, int rc) {
   char *p;
   nxt_unit_buf_t *buf;
@@ -238,6 +261,8 @@ void request_router(nxt_unit_request_info_t *req_info) {
     redisContext *c = redis_connect();
     if ((strncmp(path + 4, "/nidd", 5) == 0)) {
       (void)vzw_send_nidd(req_info, rc, c);
+    } else {
+      (void)vzw_callback(req_info, rc, c);
     }
     (void)redisFree(c);
     goto end;
