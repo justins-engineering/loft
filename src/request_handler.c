@@ -111,34 +111,53 @@ void vzw_registered_callback_listeners(
   char *http_method = nxt_unit_sptr_get(&req_info->request->method);
   PRINTDBG("method: %s", http_method);
 
+  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
+  if (rc == 1) {
+    goto end;
+  }
+
   switch (http_method[0]) {
     case 'G':
-      rc = response_init(req_info, rc, 202, JSON_UTF8);
+      rc = get_registered_callback_listeners(
+          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data
+      );
       if (rc == 1) {
         goto end;
       }
-
-      rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
+      break;
+    case 'D':
+      rc = delete_registered_callback_listeners(
+          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data, "NiddService"
+      );
       if (rc == 1) {
         goto end;
       }
-
-      goto GET;
+      break;
     case 'P':
       if (http_method[1] == 'O') {
-        goto POST;
+        rc = set_registered_callback_listeners(
+            VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data, "NiddService", ""
+        );
+        if (rc == 1) {
+          goto end;
+        }
+        break;
       }
-    case 'D':
-      goto DELETE;
+      // fall through
     default:
-      (void)response_init(req_info, rc, 405, JSON_UTF8);
+      rc = nxt_unit_response_init(req_info, 405, 0, 0);
+      if (rc) {
+        nxt_unit_req_error(req_info, "Failed to initialize response");
+      }
+
+      rc = nxt_unit_response_send(req_info);
+      if (rc) {
+        nxt_unit_req_error(req_info, "Failed to send response headers");
+      }
       goto end;
   }
 
-GET:
-  rc = get_registered_callback_listeners(
-      VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data
-  );
+  rc = response_init(req_info, rc, 202, JSON_UTF8);
   if (rc == 1) {
     goto end;
   }
@@ -160,8 +179,6 @@ GET:
     goto end;
   }
 
-POST:
-DELETE:
 end:
   free(response_data.response);
   nxt_unit_request_done(req_info, rc);
