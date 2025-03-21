@@ -1,5 +1,7 @@
 #!/bin/sh
 
+set -e
+
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 # Reset in case getopts has been used previously in the shell

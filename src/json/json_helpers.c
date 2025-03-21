@@ -1,7 +1,7 @@
 /** @headerfile json_helpers.h */
 #include "json_helpers.h"
 
-#include <config.h>
+#include <definitions.h>
 
 /** Compares a string with a jsmn token value. */
 int jsoneq(

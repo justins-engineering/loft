@@ -1,13 +1,13 @@
 /** @headerfile vzw_connect.h */
 #include "firmware_requests.h"
 
-#include <config.h>
 #include <curl/curl.h>
+#include <definitions.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../curl_callbacks.h"
+#include "../curl/helpers.h"
 
 #define REPO "umts/embedded-departure-board"
 #define RELEASES_URL "https://github.com/" REPO "/releases/"
@@ -27,7 +27,7 @@ static void parse_tag(char *headers, char *tag) {
   *(tag + tag_size) = '\0';
 }
 
-static CURLcode latest_firmware_tag(CURL *curl, RecvData *header_data, char *latest_tag) {
+static CURLcode latest_firmware_tag(CURL *curl, CharBuff *header_data, char *latest_tag) {
   CURLcode res;
 
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
@@ -54,7 +54,7 @@ int download_firmware_github(FILE **fptr) {
   char *p;
   char latest_tag[12];
   char user_agent[19] = "licurl/";
-  RecvData header_data = {NULL, 0};
+  CharBuff header_data = {NULL, 0};
 
   // header_data.size = 0;
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, heap_mem_write_callback);

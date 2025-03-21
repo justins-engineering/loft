@@ -6,7 +6,7 @@
 
 #define JSMN_HEADER
 
-#include <config.h>
+#include <definitions.h>
 #include <nxt_unit.h>
 #include <nxt_unit_sptr.h>
 #include <stdio.h>
@@ -17,6 +17,7 @@
 #include "../config/vzw_secrets.h"
 #include "db/redis_connect.h"
 #include "firmware/firmware_requests.h"
+#include "vzw/credentials.h"
 #include "vzw/vzw_connect.h"
 
 #define CONTENT_TYPE "Content-Type"
@@ -99,9 +100,76 @@ static int vzw_credentials_handler(
   return 0;
 }
 
+void vzw_registered_callback_listeners(
+    nxt_unit_request_info_t *req_info, int rc, redisContext *context
+) {
+  nxt_unit_buf_t *buf;
+  CharBuff response_data = {NULL, 0};
+  char vzw_auth_token[50];
+  char vzw_m2m_token[50];
+
+  char *http_method = nxt_unit_sptr_get(&req_info->request->method);
+  PRINTDBG("method: %s", http_method);
+
+  switch (http_method[0]) {
+    case 'G':
+      rc = response_init(req_info, rc, 202, JSON_UTF8);
+      if (rc == 1) {
+        goto end;
+      }
+
+      rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
+      if (rc == 1) {
+        goto end;
+      }
+
+      goto GET;
+    case 'P':
+      if (http_method[1] == 'O') {
+        goto POST;
+      }
+    case 'D':
+      goto DELETE;
+    default:
+      (void)response_init(req_info, rc, 405, JSON_UTF8);
+      goto end;
+  }
+
+GET:
+  rc = get_registered_callback_listeners(
+      VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data
+  );
+  if (rc == 1) {
+    goto end;
+  }
+
+  buf = nxt_unit_response_buf_alloc(
+      req_info, ((req_info->request_buf->end - req_info->request_buf->start) + response_data.size)
+  );
+  if (buf == NULL) {
+    rc = NXT_UNIT_ERROR;
+    nxt_unit_req_error(req_info, "Failed to allocate response buffer");
+    goto end;
+  }
+
+  buf->free = mempcpy(buf->free, response_data.response, response_data.size);
+
+  rc = nxt_unit_buf_send(buf);
+  if (rc) {
+    nxt_unit_req_error(req_info, "Failed to send buffer");
+    goto end;
+  }
+
+POST:
+DELETE:
+end:
+  free(response_data.response);
+  nxt_unit_request_done(req_info, rc);
+}
+
 void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *context) {
   nxt_unit_buf_t *buf;
-  RecvData response_data = {NULL, 0};
+  CharBuff response_data = {NULL, 0};
 
   rc = response_init(req_info, rc, 202, JSON_UTF8);
   if (rc == 1) {
@@ -117,8 +185,8 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
   }
 
   rc = send_nidd_data(
-      vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400", (char *)"Hello world!\n",
-      &response_data
+      VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400",
+      (char *)"Hello world!\n", &response_data
   );
   if (rc == 1) {
     goto fail;
@@ -261,6 +329,9 @@ void request_router(nxt_unit_request_info_t *req_info) {
     redisContext *c = redis_connect();
     if ((strncmp(path + 4, "/nidd", 5) == 0)) {
       (void)vzw_send_nidd(req_info, rc, c);
+    } else if (strncmp(path + 4, "/registered_callback_listeners", 30) == 0) {
+      vzw_registered_callback_listeners(req_info, rc, c);
+
     } else {
       (void)vzw_callback(req_info, rc, c);
     }

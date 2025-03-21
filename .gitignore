@@ -8,7 +8,7 @@ usr/*
 share/*
 include/*
 !include/stop.h
-!include/config.h
+!include/definitions.h
 
 *.o
 config/vzw_secrets.h

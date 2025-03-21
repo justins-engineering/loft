@@ -5,24 +5,14 @@
 #ifndef VZW_CONNECT_H
 #define VZW_CONNECT_H
 
-#include "../curl_callbacks.h"
+#include <definitions.h>
 
-/** @fn int get_vzw_auth_token(const char *username, const char *password, const
- * char *vzw_auth_keys, char *vzw_auth_token)
- *  @brief Retrieves a Thingspace auth token through a POST request.
- */
-int get_vzw_auth_token(const char *vzw_auth_keys, char *vzw_auth_token);
-
-/** @fn int get_vzw_m2m_token(const char *username, const char *password, const
- * char *vzw_auth_token, char *vzw_m2m_token)
- *  @brief Retrieves a Thingspace M2M token through a POST request.
- */
-int get_vzw_m2m_token(
-    const char *username, const char *password, const char *vzw_auth_token, char *vzw_m2m_token
+int get_registered_callback_listeners(
+    const char *account_name, char *vzw_auth_token, char *vzw_m2m_token, CharBuff *response_data
 );
 
 int send_nidd_data(
-    char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *mdt, char *message,
-    RecvData *response_data
+    const char *aname, char *vzw_auth_token, char *vzw_m2m_token, char *mdn, char *mdt,
+    char *message, CharBuff *response_data
 );
 #endif

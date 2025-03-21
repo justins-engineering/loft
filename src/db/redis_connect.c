@@ -3,7 +3,7 @@
 
 // #include <hiredis/adapters/libevent.h>
 // #include <hiredis/async.h>
-#include <config.h>
+#include <definitions.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

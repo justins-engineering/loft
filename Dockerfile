@@ -192,7 +192,7 @@ COPY --link ./modules/ "$app_clone_dir"/modules
 
 # Copy app source files
 COPY --link ./src/ "$app_src_dir"
-COPY --link ./include/config.h "$app_include_dir"
+COPY --link ./include/definitions.h "$app_include_dir"
 COPY --link ./Makefile "$app_clone_dir"
 
 # Copy app assets

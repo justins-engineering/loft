@@ -9,7 +9,6 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-// #include "config.h"
 #include "request_handler.h"
 
 static int thread_count;
