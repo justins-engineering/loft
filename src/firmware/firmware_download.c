@@ -1,5 +1,5 @@
 /** @headerfile vzw_connect.h */
-#include "firmware_requests.h"
+#include "firmware_download.h"
 
 #include <curl/curl.h>
 #include <definitions.h>

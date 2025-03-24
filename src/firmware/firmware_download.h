@@ -2,8 +2,8 @@
  *  @brief Macro and function defines for iot firmware related requests.
  */
 
-#ifndef FIRMWARE_REQUESTS_H
-#define FIRMWARE_REQUESTS_H
+#ifndef FIRMWARE_DOWNLOAD_H
+#define FIRMWARE_DOWNLOAD_H
 
 #include <stdio.h>
 
@@ -11,4 +11,4 @@
  *  @brief Caches and sends latest firmware from github releases.
  */
 int download_firmware_github(FILE **fptr);
-#endif
+#endif  // FIRMWARE_DOWNLOAD_H

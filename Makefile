@@ -38,12 +38,12 @@ linked_libs = -lc -lpthread -lssl -lcrypto -lcurl -lunit -lvznidd -lhiredis -lhi
 CFLAGS += $(OPTIMIZATION) -fPIC $(WARNINGS) $(EXTRA_CFLAGS) $(arch) -I$(INSTALL_INCLUDE_PATH)
 LDFLAGS += -L$(DIR) -L$(INSTALL_LIBRARY_PATH) $(linked_libs) $(EXTRA_LDFLAGS)
 
-subdirs= $(addprefix $(SRC_PATH), /db /firmware /json /vzw /curl)
+subdirs= $(addprefix $(SRC_PATH), /db /firmware /json /curl /request)
 
 VPATH = $(SRC_PATH) $(subdirs) $(INSTALL_INCLUDE_PATH)
 
-objects = main.o jsmn.o json_helpers.o  request_handler.o firmware_requests.o \
-	redis_connect.o
+objects = main.o jsmn.o json_helpers.o router.o firmware_download.o \
+	firmware_handler.o redis_connector.o request_common.o vzw_handler.o
 
 hiredis_headers = $(addprefix hiredis/, hiredis.h async.h read.h sds.h alloc.h sockcompat.h hiredis_ssl.h adapters/*.h)
 

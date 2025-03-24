@@ -1,15 +1,9 @@
-/** @headerfile redis_connect.h */
-#include "redis_connect.h"
+#include "redis_connector.h"
 
 // #include <hiredis/adapters/libevent.h>
 // #include <hiredis/async.h>
 #include <definitions.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-// void *redisCommand(redisContext *c, const char *format, ...);
-// void freeReplyObject(void *reply);
 
 redisContext *redis_connect(void) {
   redisContext *c = redisConnect("172.17.0.1", 6379);

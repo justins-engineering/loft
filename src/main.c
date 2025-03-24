@@ -5,11 +5,10 @@
 
 #include <curl/curl.h>
 #include <nxt_unit.h>
-#include <nxt_unit_request.h>
 #include <pthread.h>
 #include <stdlib.h>
 
-#include "request_handler.h"
+#include "request/router.h"
 
 static int thread_count;
 static pthread_t *threads = NULL;
