@@ -13,12 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <vzw_nidd.h>
 
 #include "../config/vzw_secrets.h"
 #include "db/redis_connect.h"
 #include "firmware/firmware_requests.h"
-#include "vzw/credentials.h"
-#include "vzw/vzw_connect.h"
+
+#define CharBuff VZWResponseData
 
 #define CONTENT_TYPE "Content-Type"
 #define TEXT_HTML_UTF8 "text/html; charset=utf-8"
@@ -27,7 +28,7 @@
 #define OCTET_STREAM "application/octet-stream;"
 
 #define REDIS_VZW_AUTH_KEY "VZW_AUTH_TOKEN"
-#define REDIS_VZW_M2M_KEY "VZW_M2M_TOKEN"
+#define REDIS_VZW_M2M_KEY "VZW_SESSION_TOKEN"
 
 static inline char *copy(char *p, const void *src, uint32_t len) {
   memcpy(p, src, len);
@@ -61,7 +62,7 @@ static int response_init(
 }
 
 static int vzw_credentials_handler(
-    redisContext *context, char *vzw_auth_token, char *vzw_m2m_token
+    redisContext *context, char *vzw_auth_token, char *vzw_session_token
 ) {
   int rc = redis_get(context, REDIS_VZW_AUTH_KEY, vzw_auth_token);
   if (rc) {
@@ -69,7 +70,7 @@ static int vzw_credentials_handler(
   }
 
   if (*vzw_auth_token == '\0') {
-    rc = get_vzw_auth_token(VZW_PUBLIC_KEY ":" VZW_PRIVATE_KEY, vzw_auth_token);
+    rc = vzw_get_auth_token(VZW_PUBLIC_KEY ":" VZW_PRIVATE_KEY, vzw_auth_token);
     if (rc) {
       return 1;
     }
@@ -80,18 +81,18 @@ static int vzw_credentials_handler(
     }
   }
 
-  rc = redis_get(context, REDIS_VZW_M2M_KEY, vzw_m2m_token);
+  rc = redis_get(context, REDIS_VZW_M2M_KEY, vzw_session_token);
   if (rc) {
     return 1;
   }
 
-  if (*vzw_m2m_token == '\0') {
-    rc = get_vzw_m2m_token(VZW_USERNAME, VZW_PASSWORD, vzw_auth_token, vzw_m2m_token);
+  if (*vzw_session_token == '\0') {
+    rc = vzw_get_session_token(VZW_USERNAME, VZW_PASSWORD, vzw_auth_token, vzw_session_token);
     if (rc) {
       return 1;
     }
 
-    rc = redis_set_ex(context, REDIS_VZW_M2M_KEY, vzw_m2m_token, "1200");
+    rc = redis_set_ex(context, REDIS_VZW_M2M_KEY, vzw_session_token, "1200");
     if (rc) {
       return 1;
     }
@@ -106,28 +107,28 @@ void vzw_registered_callback_listeners(
   nxt_unit_buf_t *buf;
   CharBuff response_data = {NULL, 0};
   char vzw_auth_token[50];
-  char vzw_m2m_token[50];
+  char vzw_session_token[50];
 
   char *http_method = nxt_unit_sptr_get(&req_info->request->method);
   PRINTDBG("method: %s", http_method);
 
-  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
+  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_session_token);
   if (rc == 1) {
     goto end;
   }
 
   switch (http_method[0]) {
     case 'G':
-      rc = get_registered_callback_listeners(
-          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data
+      rc = vzw_get_registered_callback_listeners(
+          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_session_token, &response_data
       );
       if (rc == 1) {
         goto end;
       }
       break;
     case 'D':
-      rc = delete_registered_callback_listeners(
-          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data, "NiddService"
+      rc = vzw_delete_registered_callback_listeners(
+          VZW_ACCOUNT_NAME, vzw_auth_token, vzw_session_token, &response_data, (char *)"NiddService"
       );
       if (rc == 1) {
         goto end;
@@ -135,8 +136,9 @@ void vzw_registered_callback_listeners(
       break;
     case 'P':
       if (http_method[1] == 'O') {
-        rc = set_registered_callback_listeners(
-            VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, &response_data, "NiddService", ""
+        rc = vzw_set_registered_callback_listeners(
+            VZW_ACCOUNT_NAME, vzw_auth_token, vzw_session_token, &response_data,
+            (char *)"NiddService", (char *)""
         );
         if (rc == 1) {
           goto end;
@@ -194,15 +196,15 @@ void vzw_send_nidd(nxt_unit_request_info_t *req_info, int rc, redisContext *cont
   }
 
   char vzw_auth_token[50];
-  char vzw_m2m_token[50];
+  char vzw_session_token[50];
 
-  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_m2m_token);
+  rc = vzw_credentials_handler(context, vzw_auth_token, vzw_session_token);
   if (rc == 1) {
     goto fail;
   }
 
-  rc = send_nidd_data(
-      VZW_ACCOUNT_NAME, vzw_auth_token, vzw_m2m_token, (char *)TEST_MDN, (char *)"400",
+  rc = vzw_send_nidd_data(
+      VZW_ACCOUNT_NAME, vzw_auth_token, vzw_session_token, (char *)TEST_MDN, (char *)"400",
       (char *)"Hello world!\n", &response_data
   );
   if (rc == 1) {
