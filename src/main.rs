@@ -1,3 +1,3 @@
 fn main() {
-  dioxus::launch(dovecot::App);
+  dioxus::launch(loft::App);
 }

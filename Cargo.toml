@@ -1,5 +1,5 @@
 [package]
-name = "dovecot"
+name = "loft"
 version = "0.1.0"
 authors = ["justin <code@jes.contact>"]
 edition = "2024"

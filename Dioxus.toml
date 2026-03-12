@@ -1,4 +1,5 @@
 [application]
+name = "loft"
 asset_dir = "public"
 
 [bundle]
