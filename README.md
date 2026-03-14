@@ -6,7 +6,6 @@ A place for our pigeons to rest. The main dashboard for PigIoT. A web app create
 ### Requirements
 - [Bun](https://bun.com/get)
 - [Dioxus CLI](https://dioxuslabs.com/learn/0.7/getting_started/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
 
 ### Tailwind CSS
 1. Run the following command in the root of the project:

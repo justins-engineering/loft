@@ -27,12 +27,24 @@ web-sys = { version = "0.3", features = [
   "RequestCredentials",
 ] }
 dioxus = { version = "0.7", features = ["router"] }
+dioxus-free-icons = { version = "0.10", features = [
+  "font-awesome-brands",
+  "lucide"
+] }
+dioxus-i18n = { version = "0.5" }
 serde_json = "1"
 js-sys = { version = "0.3" }
 strum = "0.28"
+ory-kratos-client-wasm = { version = "0.2" }
+unic-langid = { version = "0.9" }
+chrono = { version = "0.4", default-features = false, features = [
+  "now",
+  "wasmbind",
+] }
+wasm-theme = { version = "0.1" }
+const_format = "0.2"
 
 # Dependencies for `api`
-# reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_urlencoded = { version = "0.7" }
 
@@ -47,6 +59,9 @@ gloo-net = { version = "0.6", features = ["websocket"] }
 bytes = { version = "1" }
 thiserror = "2.0"
 anyhow = "1.0"
+
+[build-dependencies]
+dotenvy = "0.15"
 
 [features]
 default = ["web"]
