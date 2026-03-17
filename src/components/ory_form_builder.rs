@@ -2,6 +2,8 @@ use dioxus::logger::tracing::error;
 use dioxus::prelude::*;
 use ory_kratos_client_wasm::models::UiNodeAttributes::{A, Div, Img, Input, Script, Text};
 
+const TEL_REGEX: &str = "\\+?(9[976]\\d|8[987530]\\d|6[987]\\d|5[90]\\d|42\\d|3[875]\\d|2[98654321]\\d|9[8543210]|8[6421]|6[6543210]|5[87654321]|4[987654310]|3[9643210]|2[70]|7|1)\\d{1,14}";
+
 #[component]
 fn InputFieldNode(
   meta: Option<Box<ory_kratos_client_wasm::models::UiText>>,
@@ -131,23 +133,28 @@ fn InputCheckBoxNode(
 ) -> Element {
   rsx! {
     if let Some(ref label) = meta {
-      label { id: label.id,
-        {label.text.to_owned()}
+      label { id: label.id, class: "w-full",
         input {
           disabled: attrs.disabled,
-          class: "input w-full",
+          class: "checkbox",
           name: attrs.name,
           r#type: format!("{:?}", attrs.r#type).to_lowercase(),
           checked: if let Some(v) = attrs.value { if let Some(serde_json::Value::Bool(b)) = v { b } else { false } },
+          value: true,
         }
+        span { class: "ml-4", {label.text.to_owned()} }
       }
     } else {
-      input {
-        disabled: attrs.disabled,
-        class: "input",
-        name: attrs.name,
-        r#type: format!("{:?}", attrs.r#type).to_lowercase(),
-        checked: if let Some(v) = attrs.value { if let Some(serde_json::Value::Bool(b)) = v { b } else { false } },
+      label { class: "w-full",
+        input {
+          disabled: attrs.disabled,
+          class: "checkbox",
+          name: attrs.name,
+          r#type: format!("{:?}", attrs.r#type).to_lowercase(),
+          checked: if let Some(v) = attrs.value { if let Some(serde_json::Value::Bool(b)) = v { b } else { false } },
+          value: true,
+        }
+        span { class: "ml-4", {attrs.name.to_owned()} }
       }
     }
   }
@@ -289,7 +296,7 @@ fn NodeBuilder(nodes: Vec<ory_kratos_client_wasm::models::UiNode>) -> Element {
                           attrs: *i,
                           validate: true,
                           hint: rsx! {
-                            "Password must be more than 8 characters, and include:"
+                            p { "Password must be more than 8 characters, and include:" }
                             ul { class: "list-disc list-inside",
                               li { "At least one number" }
                               li { "At least one lowercase letter" }
@@ -308,7 +315,7 @@ fn NodeBuilder(nodes: Vec<ory_kratos_client_wasm::models::UiNode>) -> Element {
                   }
                   ory_kratos_client_wasm::models::ui_node_input_attributes::TypeEnum::Checkbox => {
                       rsx! {
-                        InputOtherNode { meta: node.meta.label, attrs: *i }
+                        InputCheckBoxNode { meta: node.meta.label, attrs: *i }
                       }
                   }
                   ory_kratos_client_wasm::models::ui_node_input_attributes::TypeEnum::Hidden => {
@@ -337,14 +344,28 @@ fn NodeBuilder(nodes: Vec<ory_kratos_client_wasm::models::UiNode>) -> Element {
                           attrs: *i,
                           validate: true,
                           hint: rsx! {
-                            p { "Enter valid email address" }
+                            p { "Please enter a valid email address" }
                           },
                         }
                       }
                   }
                   ory_kratos_client_wasm::models::ui_node_input_attributes::TypeEnum::Tel => {
                       rsx! {
-                        InputOtherNode { meta: node.meta.label, attrs: *i }
+                        InputFieldNode {
+                          meta: node.meta.label,
+                          attrs: *i,
+                          validate: true,
+                          hint: rsx! {
+                            p { "Please enter a valid phone number without:" }
+                            ul { class: "list-disc list-inside",
+                              li { "Characters" }
+                              li { "Spaces" }
+                              li { "Hyphens -" }
+                              li { "Parenthesis ()" }
+                            }
+                          },
+                          pattern: TEL_REGEX,
+                        }
                       }
                   }
                   ory_kratos_client_wasm::models::ui_node_input_attributes::TypeEnum::Submit => {
@@ -433,8 +454,8 @@ pub fn FormBuilder(ui: ory_kratos_client_wasm::models::UiContainer) -> Element {
         }
       }
       form { action: ui.action.clone(), method: ui.method.clone(),
-        div { class: "mt-2",
-          fieldset { class: "fieldset",
+        div { class: "my-2",
+          fieldset { class: "fieldset bg-base-100 border border-base-300 rounded-box p-4",
             NodeBuilder { nodes: default }
           }
         }
@@ -449,8 +470,8 @@ pub fn FormBuilder(ui: ory_kratos_client_wasm::models::UiContainer) -> Element {
       }
       for node_group in node_groups {
         form { action: ui.action.clone(), method: ui.method.clone(),
-          div { class: "mt-2",
-            fieldset { class: "fieldset",
+          div { class: "my-2",
+            fieldset { class: "fieldset bg-base-100 border border-base-300 rounded-box p-4",
               legend { class: "fieldset-legend text-xl",
                 {
                     match node_group[0].group {
