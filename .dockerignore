@@ -1,0 +1,10 @@
+# loft/Dockerfile and scripts/test/Dockerfile.cid-harness both build from
+# the repo root context; keep it to sources.
+target/
+**/target/
+.git/
+.claude/
+# Credential files must never enter the build context: COPY . . would bake
+# them into a persistent layer and the BuildKit cache on whatever host runs
+# the build. Runtime secrets reach the container via compose env_file only.
+**/loft.env

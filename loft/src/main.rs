@@ -27,6 +27,7 @@ mod quota;
 mod tls_common;
 mod tls_tcp;
 mod upstream;
+mod wire;
 
 use std::sync::Arc;
 use std::thread::JoinHandle;

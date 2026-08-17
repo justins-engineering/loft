@@ -2,8 +2,8 @@
 //! handshake, the terminator acts as an ordinary device-side HTTP client:
 //! `Authorization: Bearer <token>` on `/device/pigeons/:id/*`, where
 //! `token` is the pigeon's device bearer token -- a distinct credential
-//! from the PSK secret that keyed the handshake (minted together, rotated
-//! together; see `capsules::CoapConfig`). The PSK only proves the peer is
+//! from the PSK secret that keyed the handshake, minted together and
+//! rotated together by dovecote. The PSK only proves the peer is
 //! this pigeon; the bearer token is what actually authorizes each
 //! upstream call, and the owning Durable Object verifies it per-request
 //! exactly as it does for direct HTTPS devices. Nothing here weakens or

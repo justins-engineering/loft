@@ -6,9 +6,9 @@ publish = false
 description = "PidgeIoT CoAP terminator: DTLS/UDP + TLS/TCP (RFC 8323) front end translating the CoAP device surface onto dovecote's HTTP device routes"
 
 [dependencies]
-capsules.workspace = true
+# Only for deriving the deserializer on the dovecote wire types in
+# src/wire.rs; nothing else here is serde-shaped.
 serde.workspace = true
-serde_json.workspace = true
 tokio = { version = "1", features = [
   "rt-multi-thread",
   "macros",

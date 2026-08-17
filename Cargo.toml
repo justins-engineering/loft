@@ -1,0 +1,20 @@
+[workspace]
+members = [
+  "loft",
+  "dtls-ffi-shim",
+  "mbedtls-ffi-shim",
+]
+# mbedtls-ffi-shim is a member but not a default member: its build script
+# hard-fails without the system mbedTLS 3.6 headers, which a dev box need
+# not carry (loft's `mbedtls` feature is optional for the same reason). A
+# bare `cargo check`/`cargo test` at the root therefore covers the OpenSSL
+# stack anywhere, and the shipping dual-stack build reaches the shim
+# explicitly, via `-p loft --features mbedtls` in loft/Dockerfile.
+default-members = [
+  "loft",
+  "dtls-ffi-shim",
+]
+resolver = "3"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }

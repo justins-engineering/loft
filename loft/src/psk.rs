@@ -5,8 +5,9 @@
 //! Trust chain (documented in docs/infra/coap-terminator.md): the PSK
 //! identity is the pigeon's DO id; the lookup yields BOTH the short PSK
 //! that keys the handshake and the pigeon's device bearer token (minted
-//! together, rotated together -- see `capsules::CoapConfig` for why they
-//! are distinct strings). The PSK proves the peer is this pigeon; the
+//! together, rotated together, and deliberately distinct strings: the
+//! bearer token is far longer than the 32 bytes constrained PSK stacks
+//! are guaranteed to accept). The PSK proves the peer is this pigeon; the
 //! token is what the ordinary `/device/pigeons/:id/*` routes require, and
 //! the upstream DO still cryptographically verifies it on every proxied
 //! request.
@@ -94,7 +95,7 @@ impl PskSource for DovecotePskSource {
 
     match resp {
       Ok(resp) => {
-        let lookup: capsules::CoapPskLookup = resp
+        let lookup: crate::wire::CoapPskLookup = resp
           .into_json()
           .map_err(|e| format!("psk lookup body parse: {e}"))?;
         Ok(Some(PskEntry {

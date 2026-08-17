@@ -1,0 +1,3 @@
+target/
+# The terminator's VPS env file (holds COAP_SERVICE_SECRET).
+infra/coap-terminator/loft.env
