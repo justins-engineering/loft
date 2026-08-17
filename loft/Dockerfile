@@ -1,7 +1,7 @@
 # loft -- PidgeIoT CoAP terminator. Build from the REPO ROOT context
 # (cargo needs the whole workspace's manifests to resolve `-p loft`):
 #
-#   docker build -f loft/Dockerfile -t pidgeiot-loft .
+#   docker build -f loft/Dockerfile -t loft .
 #
 # See docs/infra/coap-terminator.md for deployment.
 

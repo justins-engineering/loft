@@ -1,6 +1,6 @@
 # CoAP terminator (`loft`)
 
-`loft` is the workspace's native Rust service that terminates the CoAP device transports —
+`loft` is the Rust service that terminates the CoAP device transports —
 CoAP-over-DTLS/UDP (`coaps://`, the primary transport for PSM'd cellular devices) and
 CoAP-over-TLS/TCP (`coaps+tcp://`, RFC 8323) — and translates them onto dovecote's ordinary
 HTTP device routes. The Workers runtime is HTTP-only and cannot terminate raw UDP or CoAP
@@ -11,8 +11,12 @@ below for both, and "Firewall" for why the two need genuinely different rules ra
 shared one.
 
 The wire-visible behavior (resource map, block-wise transfer, status mapping, client
-examples) is documented in `docs/api.md` → "CoAP device surface". This file is the
+examples) is documented in the PidgeIoT backend repository's `docs/api.md` → "CoAP device
+surface", which is the authority on the contract between the two services. This file is the
 deployment/operations side.
+
+`loft` lives in its own repository; dovecote, the edge Worker it proxies to, lives in the
+PidgeIoT repository. Paths below that begin `dovecote/` are in that repository, not this one.
 
 ## Trust chain
 
