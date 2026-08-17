@@ -52,7 +52,8 @@ pub struct Dovecote {
 impl Dovecote {
   pub fn new(base_url: &str) -> Result<Dovecote, String> {
     let client = reqwest::Client::builder()
-      // Distinctive UA -- docs/api.md's device-auth troubleshooting note:
+      // Distinctive UA -- the PidgeIoT repo's docs/api.md has a device-auth
+      // troubleshooting note for this:
       // default library UAs can trip edge bot heuristics into HTML 403s.
       .user_agent(concat!("loft/", env!("CARGO_PKG_VERSION")))
       .timeout(Duration::from_secs(30))

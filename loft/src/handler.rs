@@ -1,6 +1,6 @@
 //! Transport-agnostic CoAP request handling: maps the CoAP device surface
-//! 1:1 onto dovecote's `/device/pigeons/:id/*` HTTP routes (docs/api.md,
-//! "CoAP device surface").
+//! 1:1 onto dovecote's `/device/pigeons/:id/*` HTTP routes (the PidgeIoT
+//! repo's docs/api.md, "CoAP device surface").
 //!
 //! Authorization model: by the time a request reaches this handler the
 //! DTLS/TLS PSK handshake has already authenticated the peer as exactly one
