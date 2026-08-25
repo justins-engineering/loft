@@ -15,6 +15,10 @@
 # source port), and the client's self-reported handshake count is
 # cross-checked against loft's journal.
 #
+# Ahead of the cells, psk-suite-check.sh proves each pinned PSK suite is
+# actually selected by the image's OpenSSL (both DTLS stacks, both
+# transports) -- a cipher list can carry a suite the library never chooses.
+#
 # Cells (design docs/infra/coap-cid-design.md, Tier 2):
 #   1  CID rebind survival (primary): one routed datagram, no re-handshake;
 #      uplink carries type-25 CID records, downlink stays type-23 only.
@@ -297,8 +301,30 @@ run_cell() {
   echo
 }
 
+# --- PSK suite selection ------------------------------------------------------
+# Before any cell: the pinned suites must be SELECTED by the image's
+# OpenSSL, not merely listed (psk-suite-check.sh explains the trap). Both
+# DTLS stacks, both transports, on the container's own loopback -- no
+# netns involved, so a failure here is the library or the listener
+# config, never the topology.
+run_suite_check() {
+  local stack="$1"
+  echo "=== suite check: $stack ==="
+  if /usr/local/bin/psk-suite-check.sh /usr/local/bin/loft /usr/local/bin/psk_stub "$stack" \
+       >"$WORK/suite-$stack.log" 2>&1; then
+    grep '^PASS' "$WORK/suite-$stack.log"
+    pass "suite check ($stack): every pinned suite negotiates as offered"
+  else
+    sed 's/^/  /' "$WORK/suite-$stack.log"
+    fail "suite check ($stack): a pinned suite was not selected"
+  fi
+  echo
+}
+
 # --- run ---------------------------------------------------------------------
 write_walker
+run_suite_check openssl
+run_suite_check mbedtls
 setup_topology
 run_cell "cid-rebind-survival" cid 1
 run_cell "no-cid-regression" nocid 2

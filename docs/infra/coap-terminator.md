@@ -242,6 +242,25 @@ In order:
    A JSON shadow document back over DTLS is the whole chain working. `coaps+tcp://` same
    command, TCP transport.
 
+   Then ask whether the constrained suite is actually *selected*, not merely listed (see
+   "Build artifact" above for why the two differ): a client offering `PSK-AES128-CCM8` alone
+   must come back with that suite on both transports. `@SECLEVEL=0` is required on the
+   client side too — without it `s_client` refuses to offer the suite at all and reports
+   "no ciphers available", which reads like a server fault and is not one.
+   ```sh
+   HEX=$(printf '%s' '<tls_psk_secret>' | od -An -v -tx1 | tr -d ' \n')
+   for proto in -dtls1_2 -tls1_2; do
+     openssl s_client $proto -connect coap.pidgeiot.com:5684 \
+       -psk_identity <pigeon_id> -psk "$HEX" \
+       -cipher 'PSK-AES128-CCM8:@SECLEVEL=0' -ciphersuites '' </dev/null 2>&1 \
+       | tr -d '\0' | grep -E '^New,|alert'
+   done
+   ```
+   Expect `New, TLSv1.2, Cipher is PSK-AES128-CCM8` twice. `Cipher is (NONE)` with
+   `alert number 40` is the failure this check exists for. `s_client` prints the suite as soon
+   as the ServerHello names one even if the handshake then fails, so pair the line with loft's
+   journal (`session established` for that peer) when the result matters.
+
    When verifying a deploy where `LOFT_DTLS_STACK=mbedtls` (or the 5685 canary listener) is
    in play, add a CID spot-check: the startup journal names the stack and the runtime mbedTLS
    version, an established CID session logs `DTLS session established (CID negotiated)`, and
@@ -264,10 +283,22 @@ extracted binary's runtime needs are what `debian:trixie-slim` already has — g
 runtime need a stock trixie does NOT ship: `apt-get install libmbedtls21` is a one-time VPS
 prep step before installing a dual-stack binary, and the post-deploy `ldd` check on the
 extracted binary must resolve `libmbedtls.so.21` alongside the OpenSSL pair. The image build
-gates both stacks' feature sets (the `openssl ciphers` PSK probe, an `nm` probe for
-`mbedtls_ssl_conf_cid` on the runtime `.so`, and the mbedtls-ffi-shim's compile-time `#error`
-probes against the build headers), so a library packaging regression fails the build loudly
-instead of failing handshakes quietly.
+gates both stacks' feature sets (an `nm` probe for `mbedtls_ssl_conf_cid` on the runtime `.so`,
+the mbedtls-ffi-shim's compile-time `#error` probes against the build headers, and the PSK
+suite check below), so a library packaging regression fails the build loudly instead of failing
+handshakes quietly.
+
+**The PSK suite check is a handshake, not a listing.** `openssl ciphers 'PSK-AES128-CCM8'`
+prints the suite identically at every security level, while OpenSSL's default level rates
+CCM8's 64-bit tag below its floor and never *selects* it — so a `ciphers | grep` gate passes
+on a library that fails every CCM8-only device with "no shared cipher". The image build instead
+runs `scripts/test/psk-suite-check.sh` against the freshly built binary: six real
+`openssl s_client` handshakes (CCM8 alone, GCM alone, CCM8 offered over GCM; DTLS and TCP)
+per DTLS stack, each of which must both report the wanted suite client-side and add exactly
+one `session established` line to loft's own journal. The listener itself serves CCM8 by
+running its PSK-only context at security level 0 (`loft/src/tls_common.rs` says why that is
+scoped to PSK by construction). The same script is the first step of the netns harness. To
+ask the question of a live deployment, the check in "Verify" below covers it.
 
 ### Firewall
 

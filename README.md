@@ -68,9 +68,11 @@ docker build -f loft/Dockerfile -t loft .
 ```
 
 That build runs from the repository root as context. Its runtime stage verifies at image build
-time that the OpenSSL it ships actually offers the PSK ciphersuites, and that the mbedTLS
-shared library actually exports Connection ID support, because either missing silently would
-fail every device instead of failing the build.
+time that the mbedTLS shared library actually exports Connection ID support, and that the
+OpenSSL it ships actually *selects* each PSK ciphersuite loft pins — by completing real
+handshakes against the freshly built binary (`scripts/test/psk-suite-check.sh`), because a
+cipher list can carry a suite the library never chooses, and either gap would silently fail
+every affected device instead of failing the build.
 
 ## Deploy
 

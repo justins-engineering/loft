@@ -30,6 +30,21 @@ work needs it. It is a throwaway container on a dev box; nothing here ever
 touches the VPS, and the PSKs are harness-minted (no real credentials, no
 real dovecote).
 
+## Suite check (runs first)
+
+Before any cell, `psk-suite-check.sh` proves each pinned PSK suite is
+actually **selected** by the image's OpenSSL, for both DTLS stacks and both
+transports, on the container's loopback. A cipher list can carry a suite
+the library never chooses — OpenSSL's default security level lists
+`PSK-AES128-CCM8` and refuses to select it, and `openssl ciphers` cannot
+tell the difference — so this is six real `openssl s_client` handshakes
+against the real binary: CCM8 alone, GCM alone, and CCM8 offered over GCM,
+each of which must both report the wanted suite client-side and add
+exactly one `session established` line to loft's journal (s_client names a
+suite as soon as the ServerHello carries one, even if the handshake then
+fails, so the client line alone is not a verdict). The same script is the
+gate in `loft/Dockerfile`'s runtime stage.
+
 ## Topology
 
 ```
