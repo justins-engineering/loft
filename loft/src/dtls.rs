@@ -608,6 +608,18 @@ mod tests {
   /// Attempts the DTLS handshake, giving up (None) at the deadline -- the
   /// shape a quota-refused client presents: no error record, just silence.
   fn try_connect_client(server: SocketAddr, patience: Duration) -> Option<SslStream<ClientIo>> {
+    try_connect_client_with(server, patience, "PSK-AES128-GCM-SHA256")
+  }
+
+  /// As above, from a client offering exactly `offer`. The client's own
+  /// security level would refuse to offer CCM8, so the offer is pinned to
+  /// level 0 on that side -- the same `@SECLEVEL=0` an `openssl s_client`
+  /// probe needs.
+  fn try_connect_client_with(
+    server: SocketAddr,
+    patience: Duration,
+    offer: &str,
+  ) -> Option<SslStream<ClientIo>> {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind client");
     sock.connect(server).expect("connect client");
     sock
@@ -616,7 +628,7 @@ mod tests {
 
     let mut builder = SslContext::builder(SslMethod::dtls()).expect("client ctx");
     builder
-      .set_cipher_list("PSK-AES128-GCM-SHA256")
+      .set_cipher_list(&format!("{offer}:@SECLEVEL=0"))
       .expect("cipher list");
     builder.set_psk_client_callback(|_ssl, _hint, identity_out, psk_out| {
       identity_out[..TEST_IDENTITY.len()].copy_from_slice(TEST_IDENTITY.as_bytes());
@@ -755,6 +767,30 @@ mod tests {
     // promotion consumed the previous one.
     let _second = connect_client(server);
     assert_eq!(conns.lock().expect("conn map lock").len(), 2);
+  }
+
+  /// Every pinned suite must be selected through the real listener --
+  /// cookie exchange, promotion, and all -- when it is all a client
+  /// offers, and CCM8 ahead of GCM must land on CCM8 (the listener follows
+  /// the client's order, so GCM there would mean CCM8 was excluded).
+  #[test]
+  fn dtls_psk_suites_negotiate_as_offered() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .build()
+      .expect("runtime");
+    let (server, _conns) = start_listener(&rt);
+
+    for (offer, want) in [
+      ("PSK-AES128-CCM8", "PSK-AES128-CCM8"),
+      ("PSK-AES128-GCM-SHA256", "PSK-AES128-GCM-SHA256"),
+      ("PSK-AES128-CBC-SHA256", "PSK-AES128-CBC-SHA256"),
+      ("PSK-AES128-CCM8:PSK-AES128-GCM-SHA256", "PSK-AES128-CCM8"),
+    ] {
+      let stream = try_connect_client_with(server, Duration::from_secs(10), offer)
+        .unwrap_or_else(|| panic!("offer {offer}: handshake timed out"));
+      let got = stream.ssl().current_cipher().map(|c| c.name().to_string());
+      assert_eq!(got.as_deref(), Some(want), "offer {offer}");
+    }
   }
 
   #[test]
