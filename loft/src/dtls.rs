@@ -59,6 +59,7 @@ use openssl::ssl::{ErrorCode, Ssl, SslContext, SslMethod, SslOptions, SslStream}
 use crate::config::Config;
 use crate::dtls_common::{DedupCache, process_datagram, rand_u16};
 use crate::handler::{DeviceSession, Handler};
+use crate::listen::{bind_udp, canonical_peer};
 use crate::psk::PskResolver;
 use crate::quota::{ConnPermit, ConnQuota};
 use crate::tls_common::{authenticated_session, build_psk_server_context};
@@ -166,7 +167,7 @@ fn run_inner(
   quota: ConnQuota,
 ) -> anyhow::Result<()> {
   let ctx = build_context(resolver)?;
-  let sock = UdpSocket::bind(&config.udp_listen)?;
+  let sock = bind_udp(&config.udp_listen)?;
   tracing::info!(addr = %config.udp_listen, "DTLS/UDP listener up");
 
   let conns: ConnMap = Arc::new(Mutex::new(HashMap::new()));
@@ -191,7 +192,7 @@ fn listen_loop(
 
   loop {
     let (len, peer) = match sock.recv_from(&mut buf) {
-      Ok(x) => x,
+      Ok((len, peer)) => (len, canonical_peer(peer)),
       Err(e) => {
         tracing::warn!(error = %e, "recv_from failed");
         continue;
@@ -555,6 +556,14 @@ mod tests {
     rt: &tokio::runtime::Runtime,
     quota: ConnQuota,
   ) -> (SocketAddr, ConnMap) {
+    start_listener_at(rt, quota, "127.0.0.1:0")
+  }
+
+  fn start_listener_at(
+    rt: &tokio::runtime::Runtime,
+    quota: ConnQuota,
+    bind: &str,
+  ) -> (SocketAddr, ConnMap) {
     let resolver = Arc::new(PskResolver::new(
       Box::new(|identity: &str| {
         Ok((identity == TEST_IDENTITY).then(|| PskEntry {
@@ -565,7 +574,7 @@ mod tests {
       Duration::from_secs(60),
     ));
     let ctx = build_context(resolver).expect("server context");
-    let sock = UdpSocket::bind("127.0.0.1:0").expect("bind listener");
+    let sock = bind_udp(bind).expect("bind listener");
     let addr = sock.local_addr().expect("listener addr");
     let conns: ConnMap = Arc::new(Mutex::new(HashMap::new()));
     let handler = Arc::new(Handler::new(
@@ -608,7 +617,24 @@ mod tests {
   /// Attempts the DTLS handshake, giving up (None) at the deadline -- the
   /// shape a quota-refused client presents: no error record, just silence.
   fn try_connect_client(server: SocketAddr, patience: Duration) -> Option<SslStream<ClientIo>> {
-    let sock = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+    try_connect_client_with(server, patience, "PSK-AES128-GCM-SHA256")
+  }
+
+  /// As above, from a client offering exactly `offer`. The client's own
+  /// security level would refuse to offer CCM8, so the offer is pinned to
+  /// level 0 on that side -- the same `@SECLEVEL=0` an `openssl s_client`
+  /// probe needs.
+  fn try_connect_client_with(
+    server: SocketAddr,
+    patience: Duration,
+    offer: &str,
+  ) -> Option<SslStream<ClientIo>> {
+    let loopback: SocketAddr = if server.is_ipv4() {
+      (Ipv4Addr::LOCALHOST, 0).into()
+    } else {
+      (std::net::Ipv6Addr::LOCALHOST, 0).into()
+    };
+    let sock = UdpSocket::bind(loopback).expect("bind client");
     sock.connect(server).expect("connect client");
     sock
       .set_read_timeout(Some(Duration::from_millis(200)))
@@ -616,7 +642,7 @@ mod tests {
 
     let mut builder = SslContext::builder(SslMethod::dtls()).expect("client ctx");
     builder
-      .set_cipher_list("PSK-AES128-GCM-SHA256")
+      .set_cipher_list(&format!("{offer}:@SECLEVEL=0"))
       .expect("cipher list");
     builder.set_psk_client_callback(|_ssl, _hint, identity_out, psk_out| {
       identity_out[..TEST_IDENTITY.len()].copy_from_slice(TEST_IDENTITY.as_bytes());
@@ -755,6 +781,60 @@ mod tests {
     // promotion consumed the previous one.
     let _second = connect_client(server);
     assert_eq!(conns.lock().expect("conn map lock").len(), 2);
+  }
+
+  /// A `[::]` listener serves both families on one socket and keys a v4
+  /// peer by its v4 address, so the cookie, the quota share, and the
+  /// journal see the same host whichever family carried it.
+  #[test]
+  fn dual_stack_listener_serves_both_families_and_keys_v4_peers_as_v4() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .build()
+      .expect("runtime");
+    let (server, conns) = start_listener_at(
+      &rt,
+      ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP),
+      "[::]:0",
+    );
+    let port = server.port();
+
+    let v4 = connect_client((Ipv4Addr::LOCALHOST, port).into());
+    let v4_source = v4.get_ref().0.local_addr().expect("v4 source");
+    assert!(v4_source.is_ipv4());
+    let v6 = connect_client((std::net::Ipv6Addr::LOCALHOST, port).into());
+    let v6_source = v6.get_ref().0.local_addr().expect("v6 source");
+
+    let map = conns.lock().expect("conn map lock");
+    assert_eq!(map.len(), 2);
+    assert!(
+      map.contains_key(&v4_source),
+      "v4 peer keyed by its v4 address, not the mapped form"
+    );
+    assert!(map.contains_key(&v6_source));
+  }
+
+  /// Every pinned suite must be selected through the real listener --
+  /// cookie exchange, promotion, and all -- when it is all a client
+  /// offers, and CCM8 ahead of GCM must land on CCM8 (the listener follows
+  /// the client's order, so GCM there would mean CCM8 was excluded).
+  #[test]
+  fn dtls_psk_suites_negotiate_as_offered() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .build()
+      .expect("runtime");
+    let (server, _conns) = start_listener(&rt);
+
+    for (offer, want) in [
+      ("PSK-AES128-CCM8", "PSK-AES128-CCM8"),
+      ("PSK-AES128-GCM-SHA256", "PSK-AES128-GCM-SHA256"),
+      ("PSK-AES128-CBC-SHA256", "PSK-AES128-CBC-SHA256"),
+      ("PSK-AES128-CCM8:PSK-AES128-GCM-SHA256", "PSK-AES128-CCM8"),
+    ] {
+      let stream = try_connect_client_with(server, Duration::from_secs(10), offer)
+        .unwrap_or_else(|| panic!("offer {offer}: handshake timed out"));
+      let got = stream.ssl().current_cipher().map(|c| c.name().to_string());
+      assert_eq!(got.as_deref(), Some(want), "offer {offer}");
+    }
   }
 
   #[test]

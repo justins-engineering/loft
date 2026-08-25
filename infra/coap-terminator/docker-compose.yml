@@ -16,6 +16,9 @@ services:
       - "5684:5684/tcp"
     environment:
       LOFT_DOVECOTE_URL: https://api.pidgeiot.com
+      # "[::]:5684" on both makes the listeners dual-stack inside the
+      # container; reaching them over the host's IPv6 is then a dockerd
+      # matter (ipv6 + ip6tables in daemon.json), not a loft one.
       LOFT_UDP_LISTEN: 0.0.0.0:5684
       LOFT_TCP_LISTEN: 0.0.0.0:5684
       LOFT_LOG: info

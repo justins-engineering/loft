@@ -68,9 +68,11 @@ docker build -f loft/Dockerfile -t loft .
 ```
 
 That build runs from the repository root as context. Its runtime stage verifies at image build
-time that the OpenSSL it ships actually offers the PSK ciphersuites, and that the mbedTLS
-shared library actually exports Connection ID support, because either missing silently would
-fail every device instead of failing the build.
+time that the mbedTLS shared library actually exports Connection ID support, and that the
+OpenSSL it ships actually *selects* each PSK ciphersuite loft pins — by completing real
+handshakes against the freshly built binary (`scripts/test/psk-suite-check.sh`), because a
+cipher list can carry a suite the library never chooses, and either gap would silently fail
+every affected device instead of failing the build.
 
 ## Deploy
 
@@ -82,8 +84,10 @@ development and for deploying elsewhere.
 
 Configuration is entirely environment variables (`LOFT_DOVECOTE_URL`, `LOFT_UDP_LISTEN`,
 `LOFT_TCP_LISTEN`, `LOFT_PSK_TTL_SECS`, `LOFT_LOG`, `LOFT_DTLS_STACK`) plus the service
-secret. `docs/infra/coap-terminator.md` is the full runbook: bring-up in both deployment
-shapes, firewall rules for each, secret rotation, and the local development loop.
+secret. The listeners default to IPv4; `[::]:5684` as a listen address binds dual-stack, IPv4
+and IPv6 on one socket. `docs/infra/coap-terminator.md` is the full runbook: bring-up in both
+deployment shapes, firewall rules for each, the IPv6 order of operations, secret rotation, and
+the local development loop.
 
 `scripts/test/` holds the network-namespace regression harness for the Connection ID rebind
 path. It builds a throwaway privileged container with no external network, moves a client

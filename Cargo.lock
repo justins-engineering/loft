@@ -517,6 +517,7 @@ dependencies = [
  "openssl",
  "reqwest",
  "serde",
+ "socket2",
  "tokio",
  "tracing",
  "tracing-subscriber",

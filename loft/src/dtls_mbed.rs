@@ -48,6 +48,7 @@ use mbedtls_ffi_shim::{
 
 use crate::dtls_common::{DedupCache, process_datagram, rand_u16};
 use crate::handler::{DeviceSession, Handler, next_conn_id};
+use crate::listen::{bind_udp, canonical_peer};
 use crate::psk::PskResolver;
 use crate::quota::{ConnPermit, ConnQuota};
 use crate::tls_common::resolve_psk_identity;
@@ -203,7 +204,7 @@ fn run_inner(
   quota: ConnQuota,
 ) -> anyhow::Result<()> {
   let config = build_config(resolver)?;
-  let sock = UdpSocket::bind(listen)?;
+  let sock = bind_udp(listen)?;
   tracing::info!(
     addr = %listen,
     mbedtls = %mbedtls_ffi_shim::runtime_version(),
@@ -342,7 +343,7 @@ fn listen_loop(
 
   loop {
     let (len, peer) = match sock.recv_from(&mut buf) {
-      Ok(x) => x,
+      Ok((len, peer)) => (len, canonical_peer(peer)),
       Err(e) => {
         tracing::warn!(error = %e, "recv_from failed");
         continue;
@@ -721,6 +722,10 @@ mod tests {
   const TEST_PSK: &str = "0123456789abcdef0123456789abcdef";
 
   fn start_listener(rt: &tokio::runtime::Runtime) -> (SocketAddr, ConnMap) {
+    start_listener_at(rt, "127.0.0.1:0")
+  }
+
+  fn start_listener_at(rt: &tokio::runtime::Runtime, bind: &str) -> (SocketAddr, ConnMap) {
     let resolver = Arc::new(PskResolver::new(
       Box::new(|identity: &str| {
         Ok((identity == TEST_IDENTITY).then(|| PskEntry {
@@ -731,7 +736,7 @@ mod tests {
       Duration::from_secs(60),
     ));
     let config = build_config(resolver).expect("server config");
-    let sock = UdpSocket::bind("127.0.0.1:0").expect("bind listener");
+    let sock = bind_udp(bind).expect("bind listener");
     let addr = sock.local_addr().expect("listener addr");
     let maps = ConnMap::default();
     let quota = ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP);
@@ -908,6 +913,49 @@ mod tests {
     // `coap_ping` proves by completing without any handshake() call.
     let fresh = UdpSocket::bind("127.0.0.1:0").expect("bind rebind socket");
     fresh.connect(server).expect("connect rebind socket");
+    fresh
+      .set_read_timeout(Some(Duration::from_millis(50)))
+      .expect("read timeout");
+    client.io_mut().sock = fresh;
+
+    coap_ping(&mut client, 0x5678);
+    let m = maps.lock().expect("conn maps lock");
+    assert_eq!(m.by_cid.len(), 1, "still exactly one session");
+    assert!(m.by_addr.is_empty());
+  }
+
+  /// The rebind CID exists for, across address families: a session
+  /// opened over IPv4 through a dual-stack listener continues over IPv6
+  /// as one routed datagram -- no re-handshake -- which is what lets the
+  /// device host carry an AAAA record next to its A record.
+  #[test]
+  fn cid_session_survives_a_change_of_address_family() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .build()
+      .expect("runtime");
+    let (server, maps) = start_listener_at(&rt, "[::]:0");
+    let port = server.port();
+
+    let mut client = connect_client(
+      SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)),
+      true,
+    );
+    assert!(
+      client.peer_cid().expect("peer cid").negotiated,
+      "server must negotiate CID"
+    );
+    coap_ping(&mut client, 0x1234);
+    {
+      let m = maps.lock().expect("conn maps lock");
+      assert_eq!(m.by_cid.len(), 1);
+      assert!(m.by_addr.is_empty(), "CID-only after the first read");
+    }
+
+    // The same DTLS session, now from an IPv6 source socket.
+    let fresh = UdpSocket::bind("[::1]:0").expect("bind v6 socket");
+    fresh
+      .connect(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)))
+      .expect("connect v6 socket");
     fresh
       .set_read_timeout(Some(Duration::from_millis(50)))
       .expect("read timeout");

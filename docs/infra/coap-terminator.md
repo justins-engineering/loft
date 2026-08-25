@@ -59,10 +59,24 @@ device ──DTLS-PSK / TLS-PSK──▶ loft ──HTTPS──▶ dovecote ─�
 |---|---|---|
 | `COAP_SERVICE_SECRET` | (required) | Shared secret with dovecote; same name on both sides |
 | `LOFT_DOVECOTE_URL` | `https://api.pidgeiot.com` | Upstream base URL |
-| `LOFT_UDP_LISTEN` | `0.0.0.0:5684` | DTLS listener |
-| `LOFT_TCP_LISTEN` | `0.0.0.0:5684` | TLS/TCP listener |
+| `LOFT_UDP_LISTEN` | `0.0.0.0:5684` | DTLS listener. `[::]:5684` binds dual-stack: IPv4 and IPv6 on one socket |
+| `LOFT_TCP_LISTEN` | `0.0.0.0:5684` | TLS/TCP listener. `[::]:5684` is dual-stack here too |
 | `LOFT_PSK_TTL_SECS` | `60` | Positive PSK cache TTL |
 | `LOFT_LOG` | `info` | `tracing` filter |
+| `LOFT_DTLS_STACK` | `openssl` | Which stack terminates `LOFT_UDP_LISTEN`: `openssl` or `mbedtls` (RFC 9146 CID) |
+
+**Dual-stack listening.** An IPv6 literal as a listen address is bound with `IPV6_V6ONLY`
+cleared explicitly (`loft/src/listen.rs`), so `[::]:5684` serves the host's A and AAAA records
+on one socket regardless of the `net.ipv6.bindv6only` sysctl. An IPv4 source seen through that
+socket arrives as `::ffff:a.b.c.d` and is folded back to its IPv4 form before anything keys on
+it — the demux map, the HelloVerifyRequest cookie, the per-source quota share, the journal — so
+one host is one peer whichever family carried it. On the mbedTLS listener a Connection ID
+session follows a device from one family to the other as an ordinary address migration (a
+v4-to-v6 move is exactly the rebind CID exists for; the netns harness has a cell for it). The
+PSK lookup path is untouched by the address family. An IPv4 listen address still goes through
+std's `bind` unchanged, so the default deployment is byte-for-byte what it was; nothing listens
+on IPv6 until the operator sets the `[::]` value. See "IPv6" under "Firewall" for the order of
+operations before publishing an AAAA record.
 
 `COAP_SERVICE_SECRET` has a second path under the production systemd unit: a
 `LoadCredential=` file (`loft/src/config.rs::resolve_service_secret`) takes precedence over
@@ -242,6 +256,25 @@ In order:
    A JSON shadow document back over DTLS is the whole chain working. `coaps+tcp://` same
    command, TCP transport.
 
+   Then ask whether the constrained suite is actually *selected*, not merely listed (see
+   "Build artifact" above for why the two differ): a client offering `PSK-AES128-CCM8` alone
+   must come back with that suite on both transports. `@SECLEVEL=0` is required on the
+   client side too — without it `s_client` refuses to offer the suite at all and reports
+   "no ciphers available", which reads like a server fault and is not one.
+   ```sh
+   HEX=$(printf '%s' '<tls_psk_secret>' | od -An -v -tx1 | tr -d ' \n')
+   for proto in -dtls1_2 -tls1_2; do
+     openssl s_client $proto -connect coap.pidgeiot.com:5684 \
+       -psk_identity <pigeon_id> -psk "$HEX" \
+       -cipher 'PSK-AES128-CCM8:@SECLEVEL=0' -ciphersuites '' </dev/null 2>&1 \
+       | tr -d '\0' | grep -E '^New,|alert'
+   done
+   ```
+   Expect `New, TLSv1.2, Cipher is PSK-AES128-CCM8` twice. `Cipher is (NONE)` with
+   `alert number 40` is the failure this check exists for. `s_client` prints the suite as soon
+   as the ServerHello names one even if the handshake then fails, so pair the line with loft's
+   journal (`session established` for that peer) when the result matters.
+
    When verifying a deploy where `LOFT_DTLS_STACK=mbedtls` (or the 5685 canary listener) is
    in play, add a CID spot-check: the startup journal names the stack and the runtime mbedTLS
    version, an established CID session logs `DTLS session established (CID negotiated)`, and
@@ -264,10 +297,22 @@ extracted binary's runtime needs are what `debian:trixie-slim` already has — g
 runtime need a stock trixie does NOT ship: `apt-get install libmbedtls21` is a one-time VPS
 prep step before installing a dual-stack binary, and the post-deploy `ldd` check on the
 extracted binary must resolve `libmbedtls.so.21` alongside the OpenSSL pair. The image build
-gates both stacks' feature sets (the `openssl ciphers` PSK probe, an `nm` probe for
-`mbedtls_ssl_conf_cid` on the runtime `.so`, and the mbedtls-ffi-shim's compile-time `#error`
-probes against the build headers), so a library packaging regression fails the build loudly
-instead of failing handshakes quietly.
+gates both stacks' feature sets (an `nm` probe for `mbedtls_ssl_conf_cid` on the runtime `.so`,
+the mbedtls-ffi-shim's compile-time `#error` probes against the build headers, and the PSK
+suite check below), so a library packaging regression fails the build loudly instead of failing
+handshakes quietly.
+
+**The PSK suite check is a handshake, not a listing.** `openssl ciphers 'PSK-AES128-CCM8'`
+prints the suite identically at every security level, while OpenSSL's default level rates
+CCM8's 64-bit tag below its floor and never *selects* it — so a `ciphers | grep` gate passes
+on a library that fails every CCM8-only device with "no shared cipher". The image build instead
+runs `scripts/test/psk-suite-check.sh` against the freshly built binary: six real
+`openssl s_client` handshakes (CCM8 alone, GCM alone, CCM8 offered over GCM; DTLS and TCP)
+per DTLS stack, each of which must both report the wanted suite client-side and add exactly
+one `session established` line to loft's own journal. The listener itself serves CCM8 by
+running its PSK-only context at security level 0 (`loft/src/tls_common.rs` says why that is
+scoped to PSK by construction). The same script is the first step of the netns harness. To
+ask the question of a live deployment, the check in "Verify" below covers it.
 
 ### Firewall
 
@@ -401,12 +446,33 @@ and 5684.
 
 #### IPv6
 
-Leave `5684` closed on IPv6 for now. `loft` binds `0.0.0.0` by default on both listeners
-(`LOFT_UDP_LISTEN`/`LOFT_TCP_LISTEN`, `loft/src/config.rs`) — there's no v6 listener behind the
-port, so opening a v6 firewall hole ahead of one existing would just advertise a black hole. The
-DNS step above already provisions an AAAA record alongside the A record; that only means a
-client *can* route to this host over v6, not that anything here is listening for CoAP on it —
-leave the v6 hole out until `loft` actually binds one.
+`5684` stays closed on IPv6 until `loft` listens there. By default it binds `0.0.0.0` on both
+listeners (`LOFT_UDP_LISTEN`/`LOFT_TCP_LISTEN`), so opening a v6 hole ahead of that would just
+advertise a black hole, and publishing an AAAA record ahead of it would strand every
+IPv6-preferring device (LTE-M carriers are IPv6-first) on a host that answers nothing. The order
+that never advertises what isn't served:
+
+1. Confirm the host has a global IPv6 address that is configured and routable (`ip -6 addr`,
+   `ping -6` out), and add that address to `COAP_SERVICE_ALLOWED_IPS` in dovecote (a
+   redeploy) **before** anything else: a host with v6 egress may start preferring it for the
+   outbound dovecote leg, and PSK lookups 403 until the allowlist knows the address — see
+   "Internal PSK route allowlist" above.
+2. Set both listen addresses to `[::]:5684` (the unit's `Environment=` lines, or the compose
+   `environment:` block) and restart; `ss -uln | grep 5684` shows `[::]` and the `loft
+   starting` journal line names the new values. IPv4 devices are unaffected: the same socket
+   serves both, and their addresses fold to v4 in the journal (see "Dual-stack listening"
+   under "Configuration").
+3. Open the port on the v6 chain, the two `ACCEPT`s below, then `netfilter-persistent save`.
+4. Publish the AAAA record for `coap.pidgeiot.com` — DNS-only (grey cloud), same as the A
+   record, for the same reason.
+5. Verify from an IPv6 vantage: the `coap-client` and `s_client` checks in "VPS bring-up"
+   step 5, addressed to the AAAA, must behave exactly as over v4, and loft's journal must show
+   the session with a bracketed v6 peer.
+
+```sh
+ip6tables -A INPUT -p udp --dport 5684 -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 5684 -j ACCEPT
+```
 
 SSH does listen on `[::]:22`, though, so it needs the same treatment as v4 — but as its own
 rules, not shared ones: `xt_recent` keeps its hit lists keyed by `--name`, and that table is

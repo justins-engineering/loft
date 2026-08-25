@@ -15,11 +15,20 @@
 # source port), and the client's self-reported handshake count is
 # cross-checked against loft's journal.
 #
+# Ahead of the cells, psk-suite-check.sh proves each pinned PSK suite is
+# actually selected by the image's OpenSSL (both DTLS stacks, both
+# transports) -- a cipher list can carry a suite the library never chooses.
+#
 # Cells (design docs/infra/coap-cid-design.md, Tier 2):
 #   1  CID rebind survival (primary): one routed datagram, no re-handshake;
 #      uplink carries type-25 CID records, downlink stays type-23 only.
 #   3  No-CID regression: the same rebind forces a re-handshake and no CID
 #      record ever appears -- the current fleet's shape, bit for bit.
+#   v6 The two above again with a change of family instead of a NAT flip:
+#      the client opens over NATed v4 against a dual-stack loft and moves
+#      to its own v6 address; the CID session continues with no
+#      re-handshake and the journal names the v4 -> v6 migration, the
+#      no-CID session re-handshakes over v6.
 set -uo pipefail
 
 # --- topology addresses ------------------------------------------------------
@@ -29,6 +38,12 @@ NAT_SRV_IP=10.2.0.1
 SRV_IP=10.2.0.2
 SNAT_PORT_A=40000
 SNAT_PORT_B=40001
+# The same links carry IPv6, routed rather than NATed (the v6 cells move
+# the client between families, which needs no NAT to be a rebind).
+CLI_IP6=fd00:1::2
+NAT_CLI_IP6=fd00:1::1
+NAT_SRV_IP6=fd00:2::1
+SRV_IP6=fd00:2::2
 PSK_SECRET="cid-harness-secret-not-a-real-credential"
 # Where preserved evidence goes when a cell fails; the launcher bind-mounts
 # the host side and prints the path.
@@ -130,6 +145,40 @@ setup_topology() {
 
   ip netns exec nat nft add table ip nat
   ip netns exec nat nft "add chain ip nat post { type nat hook postrouting priority srcnat ; }"
+
+  # IPv6 over the same links. `nodad` skips duplicate-address detection,
+  # which would otherwise leave the addresses tentative (unusable) for a
+  # second after assignment. srv needs a route back to the client's
+  # prefix because v6 is routed, not NATed, so the client's real address
+  # is what srv answers to.
+  ip -n cli -6 addr add "$CLI_IP6/64" dev veth-cli nodad
+  ip -n cli -6 route add default via "$NAT_CLI_IP6"
+  ip -n nat -6 addr add "$NAT_CLI_IP6/64" dev veth-natc nodad
+  ip -n nat -6 addr add "$NAT_SRV_IP6/64" dev veth-nats nodad
+  ip netns exec nat sh -c 'echo 1 > /proc/sys/net/ipv6/conf/all/forwarding'
+  local fwd6
+  fwd6=$(ip netns exec nat cat /proc/sys/net/ipv6/conf/all/forwarding)
+  expect_eq "topology: nat ipv6 forwarding enabled" "$fwd6" "1"
+  ip -n srv -6 addr add "$SRV_IP6/64" dev veth-srv nodad
+  ip -n srv -6 route add default via "$NAT_SRV_IP6"
+  # The path must actually route before a cell depends on it, so a v6
+  # failure in a cell is the listener's, never the topology's. The
+  # kernel's own link-local addresses still run duplicate-address
+  # detection (nodad above covers only the global ones) and neighbour
+  # discovery needs them, so the first second can legitimately fail.
+  local reachable=0 attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if ip netns exec cli ping -6 -c 1 -W 2 "$SRV_IP6" >/dev/null 2>&1; then
+      reachable=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$reachable" -eq 1 ]; then
+    pass "topology: cli reaches srv over IPv6 (attempt $attempt)"
+  else
+    fail "topology: cli cannot reach srv over IPv6"
+  fi
 }
 
 set_snat() {
@@ -148,12 +197,25 @@ EOF
 
 # --- one cell ----------------------------------------------------------------
 run_cell() {
-  local name="$1" mode="$2" expect_handshakes="$3"
-  echo "=== cell: $name (mode=$mode) ==="
-  local loftlog="$WORK/loft-$mode.log"
-  local stublog="$WORK/stub-$mode.log"
-  local pcap="$WORK/cap-$mode.pcap"
-  local cliout="$WORK/cli-$mode.out"
+  local name="$1" mode="$2" expect_handshakes="$3" rebind="${4:-nat}"
+  echo "=== cell: $name (mode=$mode, rebind=$rebind) ==="
+  local loftlog="$WORK/loft-$name.log"
+  local stublog="$WORK/stub-$name.log"
+  local pcap="$WORK/cap-$name.pcap"
+  local cliout="$WORK/cli-$name.out"
+
+  # nat: the SNAT flip below, v4 to v4 on a new port. v6: the client moves
+  # itself off the NATed v4 path onto its own v6 address against a
+  # dual-stack loft -- a change of family, which needs no NAT to be a
+  # rebind, and is the one an AAAA record next to the A record produces.
+  local listen="0.0.0.0:5684"
+  local post_filter="ip.src==$NAT_SRV_IP && udp.srcport==$SNAT_PORT_B"
+  local -a client_rebind=()
+  if [ "$rebind" = v6 ]; then
+    listen="[::]:5684"
+    post_filter="ipv6.src==$CLI_IP6"
+    client_rebind=(--rebind-to "[$SRV_IP6]:5684" --rebind-after 3)
+  fi
 
   set_snat "$SNAT_PORT_A"
   # Clean conntrack slate per cell: the nat namespace is shared across
@@ -165,7 +227,7 @@ run_cell() {
   sleep 0.3
   COAP_SERVICE_SECRET="$PSK_SECRET" \
     LOFT_DTLS_STACK=mbedtls \
-    LOFT_UDP_LISTEN="0.0.0.0:5684" \
+    LOFT_UDP_LISTEN="$listen" \
     LOFT_TCP_LISTEN="127.0.0.1:5684" \
     LOFT_DOVECOTE_URL="http://127.0.0.1:8788" \
     LOFT_LOG=info \
@@ -180,25 +242,30 @@ run_cell() {
   # Bounded so a wedged client can never hang the gate.
   timeout 120 ip netns exec cli /usr/local/bin/cid_client \
     --target "$SRV_IP:5684" --mode "$mode" --exchanges 8 --interval-ms 500 \
+    "${client_rebind[@]}" \
     >"$cliout" 2>&1 &
   local cli_pid=$!
   TRACKED_PIDS=("$stub_pid" "$loft_pid" "$cap_pid" "$cli_pid")
 
-  # Event-driven rebind: wait until at least three stable exchanges have
-  # landed on the first port, then flip -- instead of a fixed sleep whose
-  # margin shrinks on a loaded box.
-  local rebind_deadline=$((SECONDS + 40))
-  until grep -q '^EXCHANGE 2 ok' "$cliout" 2>/dev/null; do
-    if ! kill -0 "$cli_pid" 2>/dev/null; then break; fi
-    if [ "$SECONDS" -ge "$rebind_deadline" ]; then
-      echo "  (timed out waiting for pre-rebind exchanges)"
-      break
-    fi
-    sleep 0.1
-  done
-  echo "--- rebind: SNAT $SNAT_PORT_A -> $SNAT_PORT_B, flush conntrack ---"
-  set_snat "$SNAT_PORT_B"
-  ip netns exec nat conntrack -F >/dev/null 2>&1
+  if [ "$rebind" = nat ]; then
+    # Event-driven rebind: wait until at least three stable exchanges have
+    # landed on the first port, then flip -- instead of a fixed sleep whose
+    # margin shrinks on a loaded box.
+    local rebind_deadline=$((SECONDS + 40))
+    until grep -q '^EXCHANGE 2 ok' "$cliout" 2>/dev/null; do
+      if ! kill -0 "$cli_pid" 2>/dev/null; then break; fi
+      if [ "$SECONDS" -ge "$rebind_deadline" ]; then
+        echo "  (timed out waiting for pre-rebind exchanges)"
+        break
+      fi
+      sleep 0.1
+    done
+    echo "--- rebind: SNAT $SNAT_PORT_A -> $SNAT_PORT_B, flush conntrack ---"
+    set_snat "$SNAT_PORT_B"
+    ip netns exec nat conntrack -F >/dev/null 2>&1
+  else
+    echo "--- rebind: client moves from $CLI_IP (NATed) to [$CLI_IP6] after 3 exchanges ---"
+  fi
 
   wait "$cli_pid" 2>/dev/null
   sleep 0.5
@@ -217,10 +284,10 @@ run_cell() {
   total=$(sed -n 's#.*exchanges_ok=\([0-9]*\)/\([0-9]*\).*#\2#p' <<<"$result")
 
   local up_all down_all up_pre up_post
-  up_all=$(walk_dir "$pcap" "ip.src==$NAT_SRV_IP")
-  down_all=$(walk_dir "$pcap" "ip.src==$SRV_IP")
+  up_all=$(walk_dir "$pcap" "ip.src==$NAT_SRV_IP || ipv6.src==$CLI_IP6")
+  down_all=$(walk_dir "$pcap" "ip.src==$SRV_IP || ipv6.src==$SRV_IP6")
   up_pre=$(walk_dir "$pcap" "ip.src==$NAT_SRV_IP && udp.srcport==$SNAT_PORT_A")
-  up_post=$(walk_dir "$pcap" "ip.src==$NAT_SRV_IP && udp.srcport==$SNAT_PORT_B")
+  up_post=$(walk_dir "$pcap" "$post_filter")
 
   # --- exchange success + handshake count: these read the client output
   #     and loft's journal, not the capture, so they run unconditionally. ---
@@ -238,6 +305,15 @@ run_cell() {
       "$(grep -c 'CID negotiated' "$loftlog")" 1
     expect_eq "$name: exactly one address migration in journal" \
       "$(grep -c 'address migration' "$loftlog")" 1
+    if [ "$rebind" = v6 ]; then
+      # The journal names both ends: the NATed v4 source it started on
+      # (folded to v4 through the dual-stack socket, not the mapped form)
+      # and the bracketed v6 address it moved to. Field names and values
+      # are separated by ANSI styling in the log, hence the strip.
+      expect_eq "$name: journal migration reads v4 (folded) -> v6" \
+        "$(sed 's/\x1b\[[0-9;]*m//g' "$loftlog" \
+           | grep -c "address migration.*from=$NAT_SRV_IP:$SNAT_PORT_A .*to=\[$CLI_IP6\]:")" 1
+    fi
   fi
 
   # --- wire preconditions: the capture must exist and parse cleanly.
@@ -264,6 +340,12 @@ run_cell() {
     # at ANY record position (the device blackholes those).
     expect_eq "$name: zero type-25 downlink records (device-safe)" "$(count_type "$down_all" 25)" 0
     expect_ge "$name: downlink carried type-23 application records" "$(count_type "$down_all" 23)" 1
+    if [ "$rebind" = v6 ]; then
+      # Replies after the move must leave over v6 -- through the same
+      # socket that took the v4 half of the session.
+      expect_ge "$name: post-rebind downlink to the v6 address carried type-23 records" \
+        "$(count_type "$(walk_dir "$pcap" "ipv6.src==$SRV_IP6")" 23)" 1
+    fi
 
     if [ "$mode" = cid ]; then
       # CID engaged on BOTH the pre- and post-rebind source ports -- the
@@ -297,11 +379,35 @@ run_cell() {
   echo
 }
 
+# --- PSK suite selection ------------------------------------------------------
+# Before any cell: the pinned suites must be SELECTED by the image's
+# OpenSSL, not merely listed (psk-suite-check.sh explains the trap). Both
+# DTLS stacks, both transports, on the container's own loopback -- no
+# netns involved, so a failure here is the library or the listener
+# config, never the topology.
+run_suite_check() {
+  local stack="$1"
+  echo "=== suite check: $stack ==="
+  if /usr/local/bin/psk-suite-check.sh /usr/local/bin/loft /usr/local/bin/psk_stub "$stack" \
+       >"$WORK/suite-$stack.log" 2>&1; then
+    grep '^PASS' "$WORK/suite-$stack.log"
+    pass "suite check ($stack): every pinned suite negotiates as offered"
+  else
+    sed 's/^/  /' "$WORK/suite-$stack.log"
+    fail "suite check ($stack): a pinned suite was not selected"
+  fi
+  echo
+}
+
 # --- run ---------------------------------------------------------------------
 write_walker
+run_suite_check openssl
+run_suite_check mbedtls
 setup_topology
 run_cell "cid-rebind-survival" cid 1
 run_cell "no-cid-regression" nocid 2
+run_cell "cid-rebind-v4-to-v6" cid 1 v6
+run_cell "no-cid-v4-to-v6" nocid 2 v6
 
 echo "==================================="
 if [ "$FAILURES" -eq 0 ]; then

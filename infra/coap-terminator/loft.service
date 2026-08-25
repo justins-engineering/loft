@@ -36,6 +36,9 @@ RestartSec=5s
 # future default change in code can't silently change prod behavior
 # without a deliberate edit to this file too.
 Environment=LOFT_DOVECOTE_URL=https://api.pidgeiot.com
+# [::]:5684 on both makes the listeners dual-stack (IPv4 and IPv6 on one
+# socket each); the runbook's "IPv6" section gives the order of
+# operations, since the AAAA record must not precede the listener.
 Environment=LOFT_UDP_LISTEN=0.0.0.0:5684
 Environment=LOFT_TCP_LISTEN=0.0.0.0:5684
 Environment=LOFT_LOG=info
