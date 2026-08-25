@@ -13,7 +13,7 @@
 //! - No message ids, no ACKs, no retransmission -- TCP owns reliability.
 
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,6 +23,7 @@ use crate::coap::message::{Message, code};
 use crate::coap::tcp::{FrameDecoder, encode_frame};
 use crate::config::Config;
 use crate::handler::{DeviceSession, Handler, Transport};
+use crate::listen::{bind_tcp, canonical_peer};
 use crate::psk::PskResolver;
 use crate::quota::{ConnQuota, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP};
 use crate::tls_common::{authenticated_session, build_psk_server_context};
@@ -103,7 +104,7 @@ fn run_inner(
   rt: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
   let ctx = build_psk_server_context(SslMethod::tls_server(), false, resolver)?.build();
-  let listener = TcpListener::bind(&config.tcp_listen)?;
+  let listener = bind_tcp(&config.tcp_listen)?;
   tracing::info!(addr = %config.tcp_listen, "TLS/TCP listener up");
 
   let quota = ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP);
@@ -119,7 +120,7 @@ fn run_inner(
 
     // Admission is keyed on the source IP; a socket that can't name its
     // peer can't be accounted, so it isn't admitted.
-    let Ok(peer_ip) = stream.peer_addr().map(|a| a.ip()) else {
+    let Ok(peer_ip) = stream.peer_addr().map(|a| canonical_peer(a).ip()) else {
       continue;
     };
     let Some(permit) = quota.try_acquire(peer_ip) else {
@@ -154,7 +155,7 @@ fn connection_thread(
   rt: &tokio::runtime::Handle,
 ) {
   let peer = match tcp.peer_addr() {
-    Ok(a) => a.to_string(),
+    Ok(a) => canonical_peer(a).to_string(),
     Err(_) => "unknown".to_string(),
   };
   // Tick-length timeouts on both directions while the handshake runs, so a
@@ -300,6 +301,7 @@ fn serve_frames(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::net::TcpListener;
 
   /// Data availability must not bypass the deadline: the guard refuses IO
   /// even with a byte already queued, and reverts to a passthrough once

@@ -59,10 +59,24 @@ device ──DTLS-PSK / TLS-PSK──▶ loft ──HTTPS──▶ dovecote ─�
 |---|---|---|
 | `COAP_SERVICE_SECRET` | (required) | Shared secret with dovecote; same name on both sides |
 | `LOFT_DOVECOTE_URL` | `https://api.pidgeiot.com` | Upstream base URL |
-| `LOFT_UDP_LISTEN` | `0.0.0.0:5684` | DTLS listener |
-| `LOFT_TCP_LISTEN` | `0.0.0.0:5684` | TLS/TCP listener |
+| `LOFT_UDP_LISTEN` | `0.0.0.0:5684` | DTLS listener. `[::]:5684` binds dual-stack: IPv4 and IPv6 on one socket |
+| `LOFT_TCP_LISTEN` | `0.0.0.0:5684` | TLS/TCP listener. `[::]:5684` is dual-stack here too |
 | `LOFT_PSK_TTL_SECS` | `60` | Positive PSK cache TTL |
 | `LOFT_LOG` | `info` | `tracing` filter |
+| `LOFT_DTLS_STACK` | `openssl` | Which stack terminates `LOFT_UDP_LISTEN`: `openssl` or `mbedtls` (RFC 9146 CID) |
+
+**Dual-stack listening.** An IPv6 literal as a listen address is bound with `IPV6_V6ONLY`
+cleared explicitly (`loft/src/listen.rs`), so `[::]:5684` serves the host's A and AAAA records
+on one socket regardless of the `net.ipv6.bindv6only` sysctl. An IPv4 source seen through that
+socket arrives as `::ffff:a.b.c.d` and is folded back to its IPv4 form before anything keys on
+it — the demux map, the HelloVerifyRequest cookie, the per-source quota share, the journal — so
+one host is one peer whichever family carried it. On the mbedTLS listener a Connection ID
+session follows a device from one family to the other as an ordinary address migration (a
+v4-to-v6 move is exactly the rebind CID exists for; the netns harness has a cell for it). The
+PSK lookup path is untouched by the address family. An IPv4 listen address still goes through
+std's `bind` unchanged, so the default deployment is byte-for-byte what it was; nothing listens
+on IPv6 until the operator sets the `[::]` value. See "IPv6" under "Firewall" for the order of
+operations before publishing an AAAA record.
 
 `COAP_SERVICE_SECRET` has a second path under the production systemd unit: a
 `LoadCredential=` file (`loft/src/config.rs::resolve_service_secret`) takes precedence over
@@ -432,12 +446,33 @@ and 5684.
 
 #### IPv6
 
-Leave `5684` closed on IPv6 for now. `loft` binds `0.0.0.0` by default on both listeners
-(`LOFT_UDP_LISTEN`/`LOFT_TCP_LISTEN`, `loft/src/config.rs`) — there's no v6 listener behind the
-port, so opening a v6 firewall hole ahead of one existing would just advertise a black hole. The
-DNS step above already provisions an AAAA record alongside the A record; that only means a
-client *can* route to this host over v6, not that anything here is listening for CoAP on it —
-leave the v6 hole out until `loft` actually binds one.
+`5684` stays closed on IPv6 until `loft` listens there. By default it binds `0.0.0.0` on both
+listeners (`LOFT_UDP_LISTEN`/`LOFT_TCP_LISTEN`), so opening a v6 hole ahead of that would just
+advertise a black hole, and publishing an AAAA record ahead of it would strand every
+IPv6-preferring device (LTE-M carriers are IPv6-first) on a host that answers nothing. The order
+that never advertises what isn't served:
+
+1. Confirm the host has a global IPv6 address that is configured and routable (`ip -6 addr`,
+   `ping -6` out), and add that address to `COAP_SERVICE_ALLOWED_IPS` in dovecote (a
+   redeploy) **before** anything else: a host with v6 egress may start preferring it for the
+   outbound dovecote leg, and PSK lookups 403 until the allowlist knows the address — see
+   "Internal PSK route allowlist" above.
+2. Set both listen addresses to `[::]:5684` (the unit's `Environment=` lines, or the compose
+   `environment:` block) and restart; `ss -uln | grep 5684` shows `[::]` and the `loft
+   starting` journal line names the new values. IPv4 devices are unaffected: the same socket
+   serves both, and their addresses fold to v4 in the journal (see "Dual-stack listening"
+   under "Configuration").
+3. Open the port on the v6 chain, the two `ACCEPT`s below, then `netfilter-persistent save`.
+4. Publish the AAAA record for `coap.pidgeiot.com` — DNS-only (grey cloud), same as the A
+   record, for the same reason.
+5. Verify from an IPv6 vantage: the `coap-client` and `s_client` checks in "VPS bring-up"
+   step 5, addressed to the AAAA, must behave exactly as over v4, and loft's journal must show
+   the session with a bracketed v6 peer.
+
+```sh
+ip6tables -A INPUT -p udp --dport 5684 -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 5684 -j ACCEPT
+```
 
 SSH does listen on `[::]:22`, though, so it needs the same treatment as v4 — but as its own
 rules, not shared ones: `xt_recent` keeps its hit lists keyed by `--name`, and that table is

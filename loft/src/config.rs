@@ -21,10 +21,12 @@ pub enum DtlsStack {
 
 #[derive(Clone)]
 pub struct Config {
-  /// UDP (DTLS, coaps) listen address. Default 0.0.0.0:5684.
+  /// UDP (DTLS, coaps) listen address. Default 0.0.0.0:5684; `[::]:5684`
+  /// serves both families on one socket (see listen.rs).
   pub udp_listen: String,
   /// TCP (TLS, coaps+tcp) listen address. Default 0.0.0.0:5684 -- same
   /// port, different protocol, per RFC 7252/8323 registered port 5684.
+  /// `[::]:5684` is dual-stack here too.
   pub tcp_listen: String,
   /// Dovecote base URL, e.g. https://api.pidgeiot.com (prod) or
   /// http://127.0.0.1:8787 (dev wrangler).
