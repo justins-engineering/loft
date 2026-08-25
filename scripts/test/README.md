@@ -77,6 +77,22 @@ resolver path is exercised without a real backend.
    rebind. Asserts: it is forced into a **second** handshake to recover
    (established-session count of two, and post-rebind handshake records on
    the wire) and no type-25 record ever appears in either direction.
+3. **`cid-rebind-v4-to-v6`** — the rebind is a change of address family
+   rather than a NAT flip: loft listens dual-stack (`[::]:5684`), the CID
+   client opens over the NATed v4 path and, after three exchanges, moves
+   itself to its own v6 address (`--rebind-to`, no NAT involved). Asserts
+   everything cell 1 does, with the post-rebind uplink read from the v6
+   source, plus: the journal's one migration line reads from the *folded*
+   v4 source (`10.2.0.1:40000`, not the `::ffff:` mapped form) to the
+   bracketed v6 address, and post-rebind downlink records leave over v6.
+4. **`no-cid-v4-to-v6`** — cell 2 across the same family change: the
+   no-CID client is forced to re-handshake, and the re-handshake happens
+   over v6 through the dual-stack listener.
+
+The topology carries IPv6 on the same veth pairs (`fd00:1::/64` client
+side, `fd00:2::/64` server side), routed through `nat` rather than NATed;
+`setup_topology` asserts v6 forwarding took and that the client can reach
+the server over v6 before any cell depends on it.
 
 Both cells first assert the capture is **non-empty** in each direction and
 that every datagram parses with **no leftover record tail**, before any

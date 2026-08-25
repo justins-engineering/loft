@@ -601,7 +601,11 @@ tests (`cargo test -p loft --features mbedtls`, `-p mbedtls-ffi-shim`) and are f
    (asserted via post-rebind uplink handshake records *and* an established-session count of
    two), with no type-25 record anywhere. The idle-eviction edges (a CID session surviving a
    synthetic >300s gap by swinging `LOFT_DTLS_CID_IDLE_SECS`, and the 300s no-CID teardown)
-   remain an extension point.
+   remain an extension point. Cells 1 and 3 also run (*implemented*) with a change of
+   address family in place of the NAT flip: loft dual-stack on `[::]:5684`, the client
+   opening over NATed v4 and moving itself to its own v6 address — the CID session
+   continues with the journal naming the folded-v4 → v6 migration, the no-CID session
+   re-handshakes over v6.
 4. **Anti-spoof/redirect**: replay a captured authenticated type-25 record (and a
    bit-flipped variant, and an already-delivered genuine record) from a third address —
    reply path must not move, no migration line, original client still served.

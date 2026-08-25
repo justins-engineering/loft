@@ -20,12 +20,13 @@ FROM debian:trixie-slim
 # gawk: the DTLS record walker needs strtonum. procps: so kill/sysctl/pkill
 # exist rather than silently 127-ing (the script still writes /proc and
 # tracks PIDs directly, but a slim image with these missing was the root
-# of an earlier gate-integrity bug). The openssl CLI the suite check
-# drives arrives as a dependency of ca-certificates.
+# of an earlier gate-integrity bug). iputils-ping: the topology proves
+# its v6 path routes before a cell depends on it. The openssl CLI the
+# suite check drives arrives as a dependency of ca-certificates.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        libssl3t64 libmbedtls21=3.6.5-0.1~deb13u1 ca-certificates \
-       iproute2 nftables conntrack tshark gawk procps \
+       iproute2 nftables conntrack tshark gawk procps iputils-ping \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/loft /usr/local/bin/loft
 COPY --from=build /src/scripts/test/cid-harness/target/release/cid_client /usr/local/bin/cid_client

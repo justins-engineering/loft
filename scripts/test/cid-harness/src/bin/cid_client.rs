@@ -7,9 +7,14 @@
 //! counts the re-handshake -- the difference the whole harness turns on:
 //! across a NAT rebind a CID client keeps its one handshake, a no-CID
 //! client is forced into a second.
+//!
+//! `--rebind-to <addr> --rebind-after <n>` makes the client move itself
+//! after n exchanges: a fresh socket in the target's address family,
+//! same DTLS session. That is the harness's change-of-family rebind (v4
+//! to v6), which no NAT is needed to produce.
 
 use std::io::Write;
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -137,8 +142,10 @@ fn main() {
   let offer_cid = arg("--mode", "cid") == "cid";
   let exchanges: usize = arg("--exchanges", "6").parse().expect("exchanges");
   let interval = Duration::from_millis(arg("--interval-ms", "500").parse().expect("interval"));
+  let rebind_to = Some(arg("--rebind-to", "")).filter(|s| !s.is_empty());
+  let rebind_after: usize = arg("--rebind-after", "3").parse().expect("rebind-after");
 
-  let sock = UdpSocket::bind("0.0.0.0:0").expect("bind client");
+  let mut sock = UdpSocket::bind("0.0.0.0:0").expect("bind client");
   sock.connect(&target).expect("connect");
 
   let config = Arc::new(Config::client(IDENTITY, PSK, offer_cid).expect("client config"));
@@ -184,6 +191,24 @@ fn main() {
         }
         None => emit(&format!("EXCHANGE {i} unrecoverable")),
       }
+    }
+    if let Some(target) = rebind_to.as_deref()
+      && i + 1 == rebind_after
+    {
+      // A change of address, and of family, on the same DTLS session:
+      // only the socket is replaced. The recovery handshake above reads
+      // the same replaced socket, so a no-CID client re-handshakes from
+      // the new address the way a real one would.
+      let target: SocketAddr = target.parse().expect("rebind target");
+      let local = if target.is_ipv6() {
+        "[::]:0"
+      } else {
+        "0.0.0.0:0"
+      };
+      sock = UdpSocket::bind(local).expect("bind rebind socket");
+      sock.connect(target).expect("connect rebind socket");
+      session.io_mut().sock = sock.try_clone().expect("clone rebind socket");
+      emit(&format!("REBIND to={target}"));
     }
     std::thread::sleep(interval);
   }
