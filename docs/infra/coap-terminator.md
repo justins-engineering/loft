@@ -107,10 +107,13 @@ every caller.
 
 Per environment:
 
-- **Production**: the VPS's egress address (the same box `coap.pidgeiot.com`'s A record
-  points at). The host has no IPv6 egress, so the single v4 address is the complete list
-  (verified 2026-08-26) — but if it ever gains a global v6 address, outbound connections to
-  dovecote may start preferring it and PSK lookups will 403 until that address is added too.
+- **Production**: the VPS's egress addresses (the same ones `coap.pidgeiot.com`'s A and AAAA
+  records point at). Through 2026-08-26 the host had no IPv6 egress, so the v4 address alone
+  was the complete list. As of that day's IPv6 bring-up (20:40Z) the host has v6 egress too,
+  from a static address, and the list is now exactly those two addresses
+  (`dovecote/wrangler.toml`, deployed in commit `c22b440`, 20:18Z). `loft`'s own upstream
+  connection to `api.pidgeiot.com` runs over v6 today — removing the v6 address from this list
+  would break its PSK lookups now, not just in some hypothetical future state.
 - **Staging**: empty — a deliberate deny-all, not an oversight, since no staging terminator
   exists. Whoever brings one up adds its egress address then.
 - **Dev**: `127.0.0.1,::1` — `wrangler dev` populates `CF-Connecting-IP` with the local
@@ -164,7 +167,9 @@ In order:
    ```
    This is dovecote's half of the shared secret; it's the same value regardless of how `loft`
    itself gets it, and doesn't need repeating if you later switch which deployment runs `loft`.
-2. **DNS**: `coap.pidgeiot.com` → A/AAAA record for the VPS, **DNS-only (grey cloud)**.
+2. **DNS**: `coap.pidgeiot.com` → A/AAAA record for the VPS, **DNS-only (grey cloud)**. Both
+   records exist as of 2026-08-26 (the AAAA published per the "IPv6" subsection below, once
+   `loft` was bound to `[::]:5684`).
    Cloudflare's proxy carries neither raw UDP nor port 5684, so an orange-clouded record
    would silently break both transports. (This also means no CF DDoS shielding on 5684 —
    the DTLS cookie exchange and connection caps below are the mitigation.) The host's egress
