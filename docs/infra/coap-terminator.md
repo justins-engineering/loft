@@ -497,9 +497,8 @@ guard (verified 2026-08-26: `iptables -S INPUT` carries the `f2b-sshd` jump,
 `iptables-multiport`, no `recent`-module rows left at all). There's no v6 throttle to build
 from scratch either: the rest of the v6 baseline below (`lo`, established/related,
 `ipv6-icmp`, the plain tcp/22 accept, policy `DROP`) is already installed on this host —
-verified 2026-08-26 — it's only the `f2b-sshd` jump for v6 that's missing, because fail2ban's
-`allowipv6 = auto` only wires up v6 ban handling if the host had a global v6 address when the
-jail last started, which it didn't:
+verified 2026-08-26 — it's only the `f2b-sshd` chain and jump for v6 that don't exist yet, and
+that has nothing to do with a restart or with `allowipv6`:
 
 ```sh
 ip6tables -A INPUT -i lo -j ACCEPT
@@ -514,17 +513,32 @@ ip6tables -P INPUT DROP
 idempotently, plus the broker's own port — run it *without* `--with-ssh-throttle`, which exists
 only for a host where v4 SSH still relies on `xt_recent`; this one doesn't.)
 
-Once step 1 above lands the address, restart fail2ban and confirm the v6 jump appears before
-publishing the AAAA record in step 4:
+`allowipv6 = auto` is already satisfied — it resolves through fail2ban's own
+`DNSUtils._IPv6IsSupportedBySystem()`, which reads `True` whenever the kernel supports v6
+sockets and `net.ipv6.conf.all.disable_ipv6` is `0`, regardless of whether a global address
+exists, so it was already `True` before step 1 ever ran. Confirm that directly rather than
+restarting anything:
 
 ```sh
-systemctl restart fail2ban
-ip6tables -S INPUT | grep f2b-sshd     # expect one line, before the AAAA goes live
+python3 -c "from fail2ban.server.ipdns import DNSUtils; print(DNSUtils.IPv6IsAllowed())"
 ```
 
-No output there means either the address from step 1 didn't actually land, or `allowipv6` was
-overridden somewhere — either way, don't publish the AAAA record until this line appears. The
-jail's own config and numbers are in the PidgeIoT repo's `docs/infra/ssh-hardening.md`.
+What actually creates the v6 `f2b-sshd` chain and jump is the `iptables-multiport` action
+itself, and it does so **on demand at that family's first ban**, not at jail start — an idle
+jail with zero v6 bans has no v6 chain yet no matter how many times fail2ban restarts. Prove it
+with a documentation-range address that is never routed (RFC 3849, `2001:db8::/32`), rather
+than waiting for a real attacker:
+
+```sh
+fail2ban-client set sshd banip 2001:db8::1; sleep 1; ip6tables -S INPUT; ip6tables -S f2b-sshd
+fail2ban-client set sshd unbanip 2001:db8::1; ip6tables -S INPUT | grep -c f2b-sshd
+```
+
+Expect the ban to create `-N f2b-sshd`, the `INPUT` jump, and a `2001:db8::1/128` `REJECT` rule
+within about a second; the unban removes only that address's rule and leaves the chain and jump
+in place, so the final `grep -c f2b-sshd` reads `1` from that point on — that count, checked
+before publishing the AAAA record in step 4, is the real gate, not a restart. The jail's own
+config and numbers are in the PidgeIoT repo's `docs/infra/ssh-hardening.md`.
 
 Never blanket-drop `ipv6-icmp` the way v4 ICMP sometimes gets treated — on v6 it isn't just
 diagnostics. Neighbor Discovery (address resolution) and Router Advertisements (the default
