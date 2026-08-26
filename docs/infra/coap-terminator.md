@@ -108,9 +108,9 @@ every caller.
 Per environment:
 
 - **Production**: the VPS's egress address (the same box `coap.pidgeiot.com`'s A record
-  points at). The host has no IPv6 egress, so the single v4 address is the complete list —
-  but if it ever gains a global v6 address, outbound connections to dovecote may start
-  preferring it and PSK lookups will 403 until that address is added too.
+  points at). The host has no IPv6 egress, so the single v4 address is the complete list
+  (verified 2026-08-26) — but if it ever gains a global v6 address, outbound connections to
+  dovecote may start preferring it and PSK lookups will 403 until that address is added too.
 - **Staging**: empty — a deliberate deny-all, not an oversight, since no staging terminator
   exists. Whoever brings one up adds its egress address then.
 - **Dev**: `127.0.0.1,::1` — `wrangler dev` populates `CF-Connecting-IP` with the local
@@ -421,22 +421,23 @@ it would be under the Docker deployment, where 5684 never touches `INPUT` at all
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A INPUT -p icmp --icmp-type destination-unreachable -j ACCEPT
-iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
+iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 5/sec -j ACCEPT
 iptables -A INPUT -p udp --dport 5684 -j ACCEPT
 iptables -A INPUT -p tcp --dport 5684 -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --name ssh --set
-iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW \
-  -m recent --name ssh --update --seconds 60 --hitcount 6 -j DROP
 iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 iptables -P INPUT DROP
 ```
 
 Destination-unreachable stays open for Path MTU discovery — dropping it turns a clean "needs
 fragmentation" signal into connections that just hang. Echo-request stays open but rate-limited
-(ping keeps working; it can't be turned into a reflection flood). SSH gets an `xt_recent`
-brute-force throttle ahead of its accept rule — as of this writing that throttle is being
-replaced by fail2ban; see [`ssh-hardening.md`](./ssh-hardening.md), unrelated to the CoAP rules
-above it in the same chain.
+(ping keeps working; it can't be turned into a reflection flood). SSH's brute-force guard isn't
+a rule in this list at all: it's fail2ban's `sshd` jail (verified 2026-08-26 — `iptables -S
+INPUT` shows an `f2b-sshd` jump inserted ahead of everything above, including `lo`), acting on
+authentication failures read from the journal rather than raw connection counts. The
+`xt_recent` throttle this section used to describe is gone; the cutover procedure and the
+jail's own numbers (`iptables-multiport`, five failures inside ten minutes, a ten-minute ban
+doubling to a day) are in the PidgeIoT repo's `docs/infra/ssh-hardening.md`, unrelated to the
+CoAP rules above it in the same chain.
 
 Postgres needs no rule here at all: prod and staging both point Hyperdrive at managed Crunchy
 Bridge (`dovecote/wrangler.toml` — only `[env.dev]`'s Hyperdrive binding uses a
@@ -458,12 +459,27 @@ that never advertises what isn't served:
    `ping -6` out), and add that address to `COAP_SERVICE_ALLOWED_IPS` in dovecote (a
    redeploy) **before** anything else: a host with v6 egress may start preferring it for the
    outbound dovecote leg, and PSK lookups 403 until the allowlist knows the address — see
-   "Internal PSK route allowlist" above.
-2. Set both listen addresses to `[::]:5684` (the unit's `Environment=` lines, or the compose
-   `environment:` block) and restart; `ss -uln | grep 5684` shows `[::]` and the `loft
-   starting` journal line names the new values. IPv4 devices are unaffected: the same socket
-   serves both, and their addresses fold to v4 in the journal (see "Dual-stack listening"
-   under "Configuration").
+   "Internal PSK route allowlist" above. Verified 2026-08-26: this host has no global v6
+   address yet, and gets no answer from either DHCPv6 or router advertisement for one — the
+   address has to come from the OVH control panel's IPv6 tab and be set statically, as a
+   netplan drop-in (this host is `systemd-networkd`, driven by netplan). The `pigeonhole`
+   repo's `docs/infra/p4-bringup.md`, step 12b, has the exact drop-in shape for this host and
+   why a bare `.network` file would silently drop the existing DHCPv4 config instead of
+   merging with it — that reasoning isn't CoAP-specific, so it isn't repeated here.
+2. Set both listen addresses to `[::]:5684` as a drop-in rather than editing the installed
+   unit directly — `/etc/systemd/system/loft.service.d/listen.conf`:
+   ```
+   [Service]
+   Environment=LOFT_UDP_LISTEN=[::]:5684
+   Environment=LOFT_TCP_LISTEN=[::]:5684
+   ```
+   (a later drop-in's `Environment=` wins over the base unit's — the same precedent this host's
+   own `dtls-stack.conf` drop-in already set), then `daemon-reload` and restart; `ss -uln |
+   grep 5684` shows `[::]` and the `loft starting` journal line names the new values. IPv4
+   devices are unaffected: the same socket serves both, and their addresses fold to v4 in the
+   journal (see "Dual-stack listening" under "Configuration"). The restart itself isn't free —
+   it drops every in-flight session on the host (one restart cost the bench feather an upload
+   timeout, observed 2026-08-26 17:44Z) — so time it outside a live device test.
 3. Open the port on the v6 chain, the two `ACCEPT`s below, then `netfilter-persistent save`.
 4. Publish the AAAA record for `coap.pidgeiot.com` — DNS-only (grey cloud), same as the A
    record, for the same reason.
@@ -476,36 +492,46 @@ ip6tables -A INPUT -p udp --dport 5684 -j ACCEPT
 ip6tables -A INPUT -p tcp --dport 5684 -j ACCEPT
 ```
 
-SSH does listen on `[::]:22`, though, so it needs the same treatment as v4 — but as its own
-rules, not shared ones: `xt_recent` keeps its hit lists keyed by `--name`, and that table is
-shared across address families, so reusing the v4 rule's name for v6 would let an attacker's v4
-attempts count against (or clear) the v6 rate limit and vice versa.
+SSH does listen on `[::]:22`, and here fail2ban — not `xt_recent` — is already the live v4
+guard (verified 2026-08-26: `iptables -S INPUT` carries the `f2b-sshd` jump,
+`iptables-multiport`, no `recent`-module rows left at all). There's no v6 throttle to build
+from scratch either: the rest of the v6 baseline below (`lo`, established/related,
+`ipv6-icmp`, the plain tcp/22 accept, policy `DROP`) is already installed on this host —
+verified 2026-08-26 — it's only the `f2b-sshd` jump for v6 that's missing, because fail2ban's
+`allowipv6 = auto` only wires up v6 ban handling if the host had a global v6 address when the
+jail last started, which it didn't:
 
 ```sh
 ip6tables -A INPUT -i lo -j ACCEPT
 ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ip6tables -A INPUT -p ipv6-icmp -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --name ssh6 --set
-ip6tables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW \
-  -m recent --name ssh6 --update --seconds 60 --hitcount 6 -j DROP
 ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+ip6tables -A INPUT -p udp --dport 546 -j ACCEPT
 ip6tables -P INPUT DROP
 ```
 
-The `recent`-module throttle above (both families) counts connections, not
-authentication failures, so a burst of legitimate SSH sessions can trip it
-same as a credential-guessing script. A fail2ban-based replacement is
-prepared in [`ssh-hardening.md`](./ssh-hardening.md) — SSH hardening is
-host-wide, not CoAP-specific, so it lives in its own doc rather than here;
-the rules above are still what's actually live on the host until that
-cutover runs.
+(the `pigeonhole` repo's `infra/ip6tables-baseline.sh` installs exactly this shape,
+idempotently, plus the broker's own port — run it *without* `--with-ssh-throttle`, which exists
+only for a host where v4 SSH still relies on `xt_recent`; this one doesn't.)
+
+Once step 1 above lands the address, restart fail2ban and confirm the v6 jump appears before
+publishing the AAAA record in step 4:
+
+```sh
+systemctl restart fail2ban
+ip6tables -S INPUT | grep f2b-sshd     # expect one line, before the AAAA goes live
+```
+
+No output there means either the address from step 1 didn't actually land, or `allowipv6` was
+overridden somewhere — either way, don't publish the AAAA record until this line appears. The
+jail's own config and numbers are in the PidgeIoT repo's `docs/infra/ssh-hardening.md`.
 
 Never blanket-drop `ipv6-icmp` the way v4 ICMP sometimes gets treated — on v6 it isn't just
 diagnostics. Neighbor Discovery (address resolution) and Router Advertisements (the default
 route under SLAAC) both ride on it, so filtering it doesn't just break pings; it produces a
 delayed loss of connectivity as neighbor and route state expires, which looks exactly like a
-random, unexplained lockout. Allow UDP 546 as well only if DHCPv6 is actually in use on this
-host.
+random, unexplained lockout. UDP 546 (DHCPv6) is accepted above because it's already part of
+this host's live v6 baseline, not because DHCPv6 actually works here — it doesn't (see step 1).
 
 #### Operational notes
 
