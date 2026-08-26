@@ -182,11 +182,13 @@ In order:
    run wherever's convenient (the VPS itself, since Docker is already there for the
    alternative path, or any other trixie-compatible host) and copied in.
    ```sh
-   # Build + extract (repo root as build context, same Dockerfile the container path uses):
-   docker build --target build -t loft-build -f loft/Dockerfile .
-   docker create --name loft-extract loft-build
-   docker cp loft-extract:/src/target/release/loft ./loft-bin
-   docker rm loft-extract
+   # Build + extract (repo root as build context, same Dockerfile the container path uses).
+   # The checkout lives in the deploy user's home (~/loft) and is build context only; nothing
+   # at runtime references it. The deploy user is not in the docker group, hence sudo.
+   sudo docker build --target build -t loft-build -f loft/Dockerfile .
+   sudo docker create --name loft-extract loft-build
+   sudo docker cp loft-extract:/src/target/release/loft ./loft-bin
+   sudo docker rm loft-extract
 
    # Install:
    install -m 0755 -o root -g root ./loft-bin /usr/local/bin/loft
