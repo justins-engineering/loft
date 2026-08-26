@@ -479,7 +479,11 @@ that never advertises what isn't served:
    devices are unaffected: the same socket serves both, and their addresses fold to v4 in the
    journal (see "Dual-stack listening" under "Configuration"). The restart itself isn't free —
    it drops every in-flight session on the host (one restart cost the bench feather an upload
-   timeout, observed 2026-08-26 17:44Z) — so time it outside a live device test.
+   timeout, observed 2026-08-26 17:44Z) — so time it outside a live device test. **Executed and
+   verified 2026-08-26 20:34:21Z**: the journal line reads `loft starting ...
+   udp=[::]:5684 tcp=[::]:5684`, both listeners came up, v6 peers log bracketed
+   (`peer=[2601:...]:44140`), and loft's own upstream calls to `api.pidgeiot.com` now run over
+   v6 with PSK lookups answering — the allowlist entry from step 1 at work.
 3. Open the port on the v6 chain, the two `ACCEPT`s below, then `netfilter-persistent save`.
 4. Publish the AAAA record for `coap.pidgeiot.com` — DNS-only (grey cloud), same as the A
    record, for the same reason.
@@ -536,9 +540,15 @@ fail2ban-client set sshd unbanip 2001:db8::1; ip6tables -S INPUT | grep -c f2b-s
 
 Expect the ban to create `-N f2b-sshd`, the `INPUT` jump, and a `2001:db8::1/128` `REJECT` rule
 within about a second; the unban removes only that address's rule and leaves the chain and jump
-in place, so the final `grep -c f2b-sshd` reads `1` from that point on — that count, checked
-before publishing the AAAA record in step 4, is the real gate, not a restart. The jail's own
-config and numbers are in the PidgeIoT repo's `docs/infra/ssh-hardening.md`.
+in place, so the final `grep -c f2b-sshd` reads `1` from that point on. That only holds until
+the next fail2ban restart, though — any restart, including the ordinary stop/save/start dance
+around `netfilter-persistent save`, discards the on-demand v6 chain again and resets the count
+to `0` until the next actual IPv6 ban (observed directly today: right after this host's own
+persist cycle for the port-5684 v6 accept, the v6 jump read `0` while v4 still read `1` —
+expected, and harmless). So the count is only meaningful since the jail's last start; run this
+ban/unban pair as the actual gate immediately before publishing the AAAA record in step 4,
+rather than trusting a `1` read earlier in the session. The jail's own config and numbers are
+in the PidgeIoT repo's `docs/infra/ssh-hardening.md`.
 
 Never blanket-drop `ipv6-icmp` the way v4 ICMP sometimes gets treated — on v6 it isn't just
 diagnostics. Neighbor Discovery (address resolution) and Router Advertisements (the default
