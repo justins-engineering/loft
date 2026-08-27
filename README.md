@@ -6,7 +6,8 @@ requests onto ordinary HTTP calls to a backend.
 
 It exists because a Cloudflare Workers runtime is HTTP-only: it cannot terminate raw UDP or
 CoAP framing. `loft` runs on an ordinary VPS in front of that backend and does the part the
-edge cannot.
+edge cannot. [`pigeonhole`](https://github.com/justins-engineering/pigeonhole), the platform's
+MQTT broker, is the same shape for a different protocol.
 
 What it handles:
 
@@ -29,9 +30,9 @@ and how the migration between them is staged.
 
 ## Wire contract with the backend
 
-The backend today is `dovecote`, the PidgeIoT edge Worker, which lives in a separate
-repository. Two HTTP surfaces connect the two services, and that repository's `docs/api.md`
-is the authority on both:
+The backend today is `dovecote`, the PidgeIoT edge Worker, which lives in the
+[`pidgeiot`](https://github.com/justins-engineering/pidgeiot) repository. Two HTTP surfaces
+connect the two services, and that repository's `docs/api.md` is the authority on both:
 
 1. **PSK resolution.** `GET /internal/coap-psk/:identity`, authenticated by a service secret
    shared between the two processes (`COAP_SERVICE_SECRET`, the same value on both sides) and
