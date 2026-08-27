@@ -3,8 +3,8 @@
 //! (`super::udp`) and the RFC 8323 TCP framing (`super::tcp`).
 //!
 //! Hand-rolled rather than `coap-lite`: that crate only speaks the 4-byte
-//! UDP header format (no RFC 8323 framing at all, confirmed against its
-//! docs), and the sibling `~/pigeon` Zephyr client already speaks a
+//! UDP header format (no RFC 8323 framing at all), and the sibling
+//! `~/pigeon` Zephyr client already speaks a
 //! hand-rolled 8323 framing this must interoperate with byte-for-byte.
 //! The shared middle (option delta encoding) is small and fully unit-tested
 //! here.
