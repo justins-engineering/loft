@@ -48,8 +48,8 @@ fn cookie_exchange_via_dtlsv1_listen_then_completes_handshake() {
       }
     };
 
-    // Documented (and now empirically pinned-down) behavior: rust-openssl's
-    // generic Read+Write transport bridge cannot report a peer address
+    // Documented behavior: rust-openssl's generic Read+Write transport
+    // bridge cannot report a peer address
     // back through BIO_ADDR, unlike a native BIO_s_datagram. See the
     // peer-address discovery notes in dtls_ffi.rs. If this ever starts
     // returning `Some`, the module docs describing today's real behavior

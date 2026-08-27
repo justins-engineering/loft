@@ -42,8 +42,8 @@ impl LossyUdp {
   /// (nonblocking is what lets that side call `dtls_get_timeout`/
   /// `dtls_handle_timeout` deliberately instead of OpenSSL's own internal
   /// auto-retransmit-on-reinvocation taking over -- see the long comment in
-  /// `timeout_retransmission.rs` for why that distinction turned out to
-  /// matter for this specific test).
+  /// `timeout_retransmission.rs` for why that distinction matters for this
+  /// specific test).
   pub fn new(label: &'static str, sock: UdpSocket) -> Self {
     LossyUdp {
       label,

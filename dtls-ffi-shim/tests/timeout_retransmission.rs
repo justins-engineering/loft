@@ -75,11 +75,10 @@ fn dropped_flight_forces_real_retransmission_via_handle_timeout() {
   // Deliberately NOT "wait, then call connect() again": re-invoking
   // `connect()`/`.accept()` at all after enough wall-clock time has passed
   // triggers OpenSSL's *own* internal auto-retransmit as a side effect of
-  // the call itself (confirmed empirically: a busy-poll design and a
-  // single-bounded-blocking-read design were both tried and both let
-  // OpenSSL heal the connection on its own, with this shim's
-  // `dtls_handle_timeout` never actually invoked -- neither would have
-  // proven anything about the shim).
+  // the call itself. A busy-poll design and a single-bounded-blocking-read
+  // design both let OpenSSL heal the connection on its own, with this
+  // shim's `dtls_handle_timeout` never invoked -- neither proves anything
+  // about the shim.
   //
   // To isolate this shim as the *only* possible cause of a retransmission,
   // the wait here is a raw `poll(2)` on the socket fd directly

@@ -1028,8 +1028,8 @@ mod tests {
       .expect("runtime");
     let (server, maps) = start_listener(&rt);
 
-    // A no-CID session keeps its by_addr entry for life -- the shape the
-    // reuse lockout used to bite.
+    // A no-CID session keeps its by_addr entry for life -- the shape an
+    // address-reuse lockout bites.
     let mut first = connect_client(server, false);
     coap_ping(&mut first, 0x3333);
 

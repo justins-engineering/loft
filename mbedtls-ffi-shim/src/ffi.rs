@@ -3,9 +3,9 @@
 //! Every mbedTLS context type is opaque on this side -- the glue TU is the
 //! only place that knows their sizes -- and every signature below is taken
 //! from the mbedTLS 3.6 headers the same build compiles the glue against,
-//! so a header/declaration mismatch cannot survive an image build. The
-//! Phase 0 gate additionally proved each of these is a real dynamic symbol
-//! of Debian trixie's libmbedtls.so.21 (`docs/infra/coap-cid-design.md`).
+//! so a header/declaration mismatch cannot survive an image build. Each is
+//! a real dynamic symbol of Debian trixie's libmbedtls.so.21
+//! (`docs/infra/coap-cid-design.md`).
 
 use std::ffi::c_void;
 use std::marker::PhantomData;

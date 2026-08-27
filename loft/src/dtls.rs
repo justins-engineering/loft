@@ -727,8 +727,8 @@ mod tests {
       .expect("runtime");
     let (server, conns) = start_listener(&rt);
 
-    // Old behavior under test: the first datagram from ANY source used to
-    // allocate a conn-map slot, a socket clone, and a parked thread. These
+    // Without cookie verification, the first datagram from ANY source
+    // allocates a conn-map slot, a socket clone, and a parked thread. These
     // sources never echo a cookie, so they must never appear in the map.
     for i in 0..64u8 {
       let sock = UdpSocket::bind("127.0.0.1:0").expect("bind flood source");
