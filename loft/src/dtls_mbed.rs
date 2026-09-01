@@ -56,7 +56,6 @@ use crate::upstream::Dovecote;
 
 const CONN_CHANNEL_DEPTH: usize = 32;
 const READ_TICK: Duration = Duration::from_secs(1);
-const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 /// Idle deadline for sessions that did NOT negotiate CID -- the current
 /// fleet's shape, kept bit-for-bit at the OpenSSL listener's figure.
 const IDLE_DEADLINE: Duration = Duration::from_secs(300);
@@ -185,12 +184,21 @@ impl MbedIo for ConnState {
 pub fn run(
   listen: &str,
   cid_idle: Duration,
+  handshake_deadline: Duration,
   resolver: Arc<PskResolver>,
   handler: Arc<Handler<Dovecote>>,
   rt: tokio::runtime::Handle,
   quota: ConnQuota,
 ) {
-  if let Err(e) = run_inner(listen, cid_idle, resolver, handler, rt, quota) {
+  if let Err(e) = run_inner(
+    listen,
+    cid_idle,
+    handshake_deadline,
+    resolver,
+    handler,
+    rt,
+    quota,
+  ) {
     tracing::error!(error = %e, "mbedTLS DTLS listener failed");
   }
 }
@@ -198,6 +206,7 @@ pub fn run(
 fn run_inner(
   listen: &str,
   cid_idle: Duration,
+  handshake_deadline: Duration,
   resolver: Arc<PskResolver>,
   handler: Arc<Handler<Dovecote>>,
   rt: tokio::runtime::Handle,
@@ -211,7 +220,16 @@ fn run_inner(
     "DTLS/UDP listener up (mbedTLS, CID)"
   );
   let maps = ConnMap::default();
-  listen_loop(sock, &config, &maps, &quota, &handler, &rt, cid_idle)
+  listen_loop(
+    sock,
+    &config,
+    &maps,
+    &quota,
+    &handler,
+    &rt,
+    cid_idle,
+    handshake_deadline,
+  )
 }
 
 fn build_config(resolver: Arc<PskResolver>) -> anyhow::Result<Arc<MbedConfig>> {
@@ -327,6 +345,7 @@ fn remove_by_cid_if_mine(maps: &ConnMap, cid: &[u8; CID_LEN], conn_id: u64) {
   }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn listen_loop(
   sock: UdpSocket,
   config: &Arc<MbedConfig>,
@@ -335,6 +354,7 @@ fn listen_loop(
   handler: &Arc<Handler<Dovecote>>,
   rt: &tokio::runtime::Handle,
   cid_idle: Duration,
+  handshake_deadline: Duration,
 ) -> anyhow::Result<()> {
   let mut pending: Option<PendingListen> = None;
   let mut buf = vec![0u8; 65535];
@@ -489,7 +509,17 @@ fn listen_loop(
           // share is charged only now, on a proven address.
           let pl = pending.take().expect("pending session present");
           match quota.try_acquire(peer.ip()) {
-            Some(permit) => promote(pl, cid, permit, peer, maps, handler, rt, cid_idle),
+            Some(permit) => promote(
+              pl,
+              cid,
+              permit,
+              peer,
+              maps,
+              handler,
+              rt,
+              cid_idle,
+              handshake_deadline,
+            ),
             None => {
               tracing::warn!(%peer, "connection quota reached, refusing verified peer");
             }
@@ -525,6 +555,7 @@ fn promote(
   handler: &Arc<Handler<Dovecote>>,
   rt: &tokio::runtime::Handle,
   cid_idle: Duration,
+  handshake_deadline: Duration,
 ) {
   let PendingListen { mut session, tx } = pl;
   let conn_id = next_conn_id();
@@ -542,7 +573,7 @@ fn promote(
   {
     let io = session.io_mut();
     io.tick = READ_TICK;
-    io.deadline = Some(Instant::now() + HANDSHAKE_DEADLINE);
+    io.deadline = Some(Instant::now() + handshake_deadline);
   }
 
   let maps_for_thread = maps.clone();
@@ -570,6 +601,7 @@ fn promote(
           &handler,
           &rt,
           cid_idle,
+          handshake_deadline,
         );
       }));
       remove_by_addr_if_mine(&maps_for_thread, peer, conn_id);
@@ -596,13 +628,14 @@ fn session_thread(
   handler: &Handler<Dovecote>,
   rt: &tokio::runtime::Handle,
   cid_idle: Duration,
+  handshake_deadline: Duration,
 ) {
   let started = Instant::now();
   loop {
     match session.handshake() {
       HandshakeStatus::Done => break,
       HandshakeStatus::WantRead | HandshakeStatus::WantWrite => {
-        if started.elapsed() > HANDSHAKE_DEADLINE {
+        if started.elapsed() > handshake_deadline {
           tracing::debug!(%peer, "handshake deadline exceeded");
           return;
         }
@@ -742,6 +775,7 @@ mod tests {
     let quota = ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP);
     let handler = Arc::new(Handler::new(
       Dovecote::new("http://127.0.0.1:9").expect("upstream stub"),
+      crate::coap::block::MAX_SZX,
     ));
     let loop_maps = maps.clone();
     let handle = rt.handle().clone();
@@ -754,6 +788,7 @@ mod tests {
         &handler,
         &handle,
         Duration::from_secs(21_600),
+        Duration::from_secs(30),
       );
     });
     (addr, maps)

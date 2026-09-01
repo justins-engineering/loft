@@ -31,13 +31,6 @@ use crate::upstream::Dovecote;
 
 /// One blocking read tick; idle handling rides on TCP read timeouts.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-/// Wall-clock bound on the WHOLE handshake, same figure as the DTLS
-/// listener's. A per-recv timeout alone is not a bound: each byte the peer
-/// dribbles in restarts it, so a slow-trickle client could sit inside
-/// accept() forever holding a pre-auth connection slot. Enforced by
-/// `GuardedTcp` on every read and write, plus the accept loop's own check
-/// on quiet ticks.
-const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 /// Socket-timeout tick during the handshake -- how often a *silent* peer
 /// surfaces WouldBlock out of accept() so the deadline can be checked.
 const HANDSHAKE_TICK: Duration = Duration::from_secs(1);
@@ -108,6 +101,7 @@ fn run_inner(
   tracing::info!(addr = %config.tcp_listen, "TLS/TCP listener up");
 
   let quota = ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP);
+  let handshake_deadline = config.handshake_deadline;
 
   for stream in listener.incoming() {
     let stream = match stream {
@@ -139,7 +133,7 @@ fn run_inner(
         // quota slots; a failed spawn drops the closure and settles the
         // same way.
         let _permit = permit;
-        connection_thread(&ctx, stream, &handler, &rt);
+        connection_thread(&ctx, stream, &handler, &rt, handshake_deadline);
       });
     if let Err(e) = spawned {
       tracing::error!(error = %e, "connection thread spawn failed");
@@ -148,11 +142,17 @@ fn run_inner(
   Ok(())
 }
 
+/// `handshake_deadline` is a wall-clock bound on the WHOLE handshake. A
+/// per-recv timeout alone is not a bound: each byte the peer dribbles in
+/// restarts it, so a slow-trickle client could sit inside accept() forever
+/// holding a pre-auth connection slot. Enforced by `GuardedTcp` on every
+/// read and write, plus this loop's own check on quiet ticks.
 fn connection_thread(
   ctx: &SslContext,
   tcp: TcpStream,
   handler: &Handler<Dovecote>,
   rt: &tokio::runtime::Handle,
+  handshake_deadline: Duration,
 ) {
   let peer = match tcp.peer_addr() {
     Ok(a) => canonical_peer(a).to_string(),
@@ -180,14 +180,14 @@ fn connection_thread(
   let started = Instant::now();
   let mut attempt = ssl.accept(GuardedTcp {
     tcp,
-    deadline: started + HANDSHAKE_DEADLINE,
+    deadline: started + handshake_deadline,
     armed: true,
   });
   let mut stream = loop {
     match attempt {
       Ok(s) => break s,
       Err(HandshakeError::WouldBlock(mid)) => {
-        if started.elapsed() > HANDSHAKE_DEADLINE {
+        if started.elapsed() > handshake_deadline {
           tracing::info!(%peer, "TLS handshake deadline exceeded");
           return;
         }

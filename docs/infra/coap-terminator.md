@@ -64,6 +64,28 @@ device ──DTLS-PSK / TLS-PSK──▶ loft ──HTTPS──▶ dovecote ─�
 | `LOFT_PSK_TTL_SECS` | `60` | Positive PSK cache TTL |
 | `LOFT_LOG` | `info` | `tracing` filter |
 | `LOFT_DTLS_STACK` | `openssl` | Which stack terminates `LOFT_UDP_LISTEN`: `openssl` or `mbedtls` (RFC 9146 CID) |
+| `LOFT_HANDSHAKE_DEADLINE_SECS` | `30` | Wall-clock bound on one handshake, both listeners. 1-300 |
+| `LOFT_UDP_MAX_BLOCK_BYTES` | `1024` | Largest payload a UDP response carries; above it, Block2 at this size. A CoAP block size only |
+
+**Tuning for a constrained link.** The last two exist for devices whose radio, not our host,
+sets the limits, and both refuse to start on a bad value rather than falling back to the
+default — the fallback would be the exact condition the operator set the var to escape.
+
+`LOFT_UDP_MAX_BLOCK_BYTES` is the largest payload a UDP response carries: a body at or below it
+goes whole, a larger one is fragmented with Block2 at this same size whether or not the client
+asked, and a client asking for a bigger block is served this size at the byte offset it asked
+for (RFC 7959 lets a server serve smaller). The default 1024 plus CoAP options plus a DTLS
+record header exceeds an nRF9160 modem's 1 kB datagram ceiling, so a fleet on that part sets
+`512`; only a legal block size is accepted (16, 32, 64, 128, 256, 512, 1024). It bounds firmware
+blocks too, which is what lets a device's *first* firmware request — the one with no prior state
+to recover from — succeed without the device knowing to ask for less. TCP is unaffected: an RFC
+8323 frame has no datagram to overflow.
+
+`LOFT_HANDSHAKE_DEADLINE_SECS` bounds one handshake on both listeners. The default 30s covers
+roughly four DTLS flight retransmissions (mbedTLS's 1, 3, 7, 15, 31s schedule) *after* the two
+round trips the HelloVerifyRequest cookie exchange spends first, which an LTE-M link in poor RF
+after a PSM wake can outrun. The accepted 1-300s range is bounded because an unfinished
+handshake holds a pre-auth connection slot.
 
 **Dual-stack listening.** An IPv6 literal as a listen address is bound with `IPV6_V6ONLY`
 cleared explicitly (`loft/src/listen.rs`), so `[::]:5684` serves the host's A and AAAA records
@@ -610,9 +632,9 @@ COAP_SERVICE_SECRET=<same value> LOFT_DOVECOTE_URL=http://127.0.0.1:8787 \
   amplified into a dovecote request flood.
 - **Connection caps**: 4096 concurrent per listener, and a 256-connection fair share per
   source address (IPv6 counted per /64, so rotating interface identifiers doesn't dodge it);
-  per-connection channel backpressure drops excess UDP datagrams; 30s wall-clock handshake
-  deadline enforced inside the IO layer, so neither silence nor a paced byte-trickle can
-  stretch it; 300s idle teardown.
+  per-connection channel backpressure drops excess UDP datagrams; a wall-clock handshake
+  deadline (`LOFT_HANDSHAKE_DEADLINE_SECS`, 30s) enforced inside the IO layer, so neither
+  silence nor a paced byte-trickle can stretch it; 300s idle teardown.
 - Threat model note: loft terminates TLS for devices, so it is trusted infrastructure in the
   same class as dovecote itself. It never holds dashboard credentials, and every device-side
   request it makes is still independently verified by the owning Durable Object.

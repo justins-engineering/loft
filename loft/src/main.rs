@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
   ));
 
   let upstream = Dovecote::new(&config.dovecote_url).map_err(|e| anyhow::anyhow!(e))?;
-  let handler = Arc::new(Handler::new(upstream));
+  let handler = Arc::new(Handler::new(upstream, config.udp_max_block_szx));
 
   tracing::info!(
     udp = %config.udp_listen,
@@ -73,6 +73,8 @@ fn main() -> anyhow::Result<()> {
     dtls_stack = ?config.dtls_stack,
     canary = config.dtls_mbed_canary_addr.as_deref().unwrap_or("off"),
     cid_idle_secs = config.dtls_cid_idle.as_secs(),
+    handshake_deadline_secs = config.handshake_deadline.as_secs(),
+    udp_max_block_bytes = crate::coap::block::size_for(config.udp_max_block_szx),
     "loft starting"
   );
 
@@ -94,6 +96,7 @@ fn main() -> anyhow::Result<()> {
     DtlsStack::Mbedtls => spawn_mbed_listener(
       config.udp_listen.clone(),
       config.dtls_cid_idle,
+      config.handshake_deadline,
       resolver.clone(),
       handler.clone(),
       runtime.handle().clone(),
@@ -108,6 +111,7 @@ fn main() -> anyhow::Result<()> {
       spawn_mbed_listener(
         addr.clone(),
         config.dtls_cid_idle,
+        config.handshake_deadline,
         resolver.clone(),
         handler.clone(),
         runtime.handle().clone(),
@@ -140,6 +144,7 @@ fn main() -> anyhow::Result<()> {
 fn spawn_mbed_listener(
   listen: String,
   cid_idle: Duration,
+  handshake_deadline: Duration,
   resolver: Arc<PskResolver>,
   handler: Arc<Handler<Dovecote>>,
   rt: tokio::runtime::Handle,
@@ -148,7 +153,17 @@ fn spawn_mbed_listener(
   Ok(
     std::thread::Builder::new()
       .name("dtls-mbed-listener".into())
-      .spawn(move || dtls_mbed::run(&listen, cid_idle, resolver, handler, rt, quota))?,
+      .spawn(move || {
+        dtls_mbed::run(
+          &listen,
+          cid_idle,
+          handshake_deadline,
+          resolver,
+          handler,
+          rt,
+          quota,
+        )
+      })?,
   )
 }
 
@@ -156,6 +171,7 @@ fn spawn_mbed_listener(
 fn spawn_mbed_listener(
   listen: String,
   _cid_idle: Duration,
+  _handshake_deadline: Duration,
   _resolver: Arc<PskResolver>,
   _handler: Arc<Handler<Dovecote>>,
   _rt: tokio::runtime::Handle,

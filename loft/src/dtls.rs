@@ -67,10 +67,9 @@ use crate::upstream::Dovecote;
 
 const CONN_CHANNEL_DEPTH: usize = 32;
 const READ_TICK: Duration = Duration::from_secs(1);
-const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 const IDLE_DEADLINE: Duration = Duration::from_secs(300);
 /// Path MTU assumption for handshake flights; CoAP responses stay under it
-/// via the handler's spontaneous Block2 (1024-byte blocks).
+/// via the handler's spontaneous Block2 (`LOFT_UDP_MAX_BLOCK_BYTES`).
 const DTLS_MTU: u32 = 1400;
 
 /// The claimed source address of the datagram currently being fed to an
@@ -171,7 +170,15 @@ fn run_inner(
   tracing::info!(addr = %config.udp_listen, "DTLS/UDP listener up");
 
   let conns: ConnMap = Arc::new(Mutex::new(HashMap::new()));
-  listen_loop(sock, &ctx, &conns, &quota, &handler, &rt)
+  listen_loop(
+    sock,
+    &ctx,
+    &conns,
+    &quota,
+    &handler,
+    &rt,
+    config.handshake_deadline,
+  )
 }
 
 /// The demux loop, taking its socket and conn map from the caller so tests
@@ -184,6 +191,7 @@ fn listen_loop(
   quota: &ConnQuota,
   handler: &Arc<Handler<Dovecote>>,
   rt: &tokio::runtime::Handle,
+  handshake_deadline: Duration,
 ) -> anyhow::Result<()> {
   // The single not-yet-verified stream every unknown source is funneled
   // through; rebuilt lazily after a promotion or a fatal listen error.
@@ -270,7 +278,9 @@ fn listen_loop(
         // the source really receives at this address -- any earlier and
         // spoofed datagrams could burn a victim IP's share.
         match quota.try_acquire(peer.ip()) {
-          Some(permit) => promote_connection(pl, permit, peer, conns, handler, rt),
+          Some(permit) => {
+            promote_connection(pl, permit, peer, conns, handler, rt, handshake_deadline)
+          }
           None => {
             tracing::warn!(%peer, "connection quota reached, refusing verified peer");
           }
@@ -392,6 +402,7 @@ fn promote_connection(
   conns: &ConnMap,
   handler: &Arc<Handler<Dovecote>>,
   rt: &tokio::runtime::Handle,
+  handshake_deadline: Duration,
 ) {
   let PendingListen { stream, tx } = pl;
   let mut map = conns.lock().expect("conn map lock");
@@ -408,7 +419,7 @@ fn promote_connection(
       // quota slots; a failed spawn drops the closure and settles the
       // same way.
       let _permit = permit;
-      connection_thread(stream, peer, &handler, &rt);
+      connection_thread(stream, peer, &handler, &rt, handshake_deadline);
       conns_for_thread
         .lock()
         .expect("conn map lock")
@@ -425,6 +436,7 @@ fn connection_thread(
   peer: SocketAddr,
   handler: &Handler<Dovecote>,
   rt: &tokio::runtime::Handle,
+  handshake_deadline: Duration,
 ) {
   // Reads may park a tick at a time from here on: unlike the listener
   // thread, this thread has nothing else to service, and the tick doubles
@@ -432,7 +444,7 @@ fn connection_thread(
   // deadline covers the complementary case of a peer that keeps datagrams
   // flowing fast enough that accept() never goes quiet.
   stream.get_mut().tick = READ_TICK;
-  stream.get_mut().deadline = Some(Instant::now() + HANDSHAKE_DEADLINE);
+  stream.get_mut().deadline = Some(Instant::now() + handshake_deadline);
 
   // The MTU must be applied after DTLSv1_listen, whose internal SSL_clear
   // resets DTLS transfer state; the handshake flights SSL_accept is about
@@ -442,7 +454,7 @@ fn connection_thread(
     return;
   }
 
-  if !complete_handshake(&mut stream, peer) {
+  if !complete_handshake(&mut stream, peer, handshake_deadline) {
     return;
   }
 
@@ -470,7 +482,11 @@ fn connection_thread(
 /// (a peer that keeps datagrams flowing). The cookie exchange already
 /// happened statelessly on the listener thread; only the post-cookie
 /// flights are driven here.
-fn complete_handshake(stream: &mut SslStream<DgramIo>, peer: SocketAddr) -> bool {
+fn complete_handshake(
+  stream: &mut SslStream<DgramIo>,
+  peer: SocketAddr,
+  deadline: Duration,
+) -> bool {
   let started = Instant::now();
   loop {
     match stream.accept() {
@@ -479,7 +495,7 @@ fn complete_handshake(stream: &mut SslStream<DgramIo>, peer: SocketAddr) -> bool
         return true;
       }
       Err(e) if matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE) => {
-        if started.elapsed() > HANDSHAKE_DEADLINE {
+        if started.elapsed() > deadline {
           tracing::debug!(%peer, "handshake deadline exceeded");
           return false;
         }
@@ -579,12 +595,21 @@ mod tests {
     let conns: ConnMap = Arc::new(Mutex::new(HashMap::new()));
     let handler = Arc::new(Handler::new(
       Dovecote::new("http://127.0.0.1:9").expect("upstream stub"),
+      crate::coap::block::MAX_SZX,
     ));
 
     let loop_conns = conns.clone();
     let handle = rt.handle().clone();
     std::thread::spawn(move || {
-      let _ = listen_loop(sock, &ctx, &loop_conns, &quota, &handler, &handle);
+      let _ = listen_loop(
+        sock,
+        &ctx,
+        &loop_conns,
+        &quota,
+        &handler,
+        &handle,
+        Duration::from_secs(30),
+      );
     });
     (addr, conns)
   }
