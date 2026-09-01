@@ -9,6 +9,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::coap::block::{self, MAX_SZX};
+
 /// Which implementation terminates DTLS on `LOFT_UDP_LISTEN`. The OpenSSL
 /// listener is the incumbent; the mbedTLS listener adds RFC 9146
 /// Connection ID (see docs/infra/coap-cid-design.md) and stays inert
@@ -52,6 +54,14 @@ pub struct Config {
   /// carry multi-second round trips, and the cookie exchange spends two
   /// of them before the PSK flights start.
   pub handshake_deadline: Duration,
+  /// LOFT_UDP_MAX_BLOCK_BYTES, as its block-size exponent: the largest
+  /// payload a UDP response carries. Above it the handler fragments with
+  /// Block2 whether or not the client asked. Deployments behind a link
+  /// with a smaller datagram ceiling than the default 1024 (the nRF9160
+  /// modem's is 1 kB, which 1024 bytes plus CoAP options plus a DTLS
+  /// record exceeds) lower it; the value is the ceiling, so a client
+  /// asking for a larger block is served a smaller one.
+  pub udp_max_block_szx: u8,
 }
 
 /// Default CID-session idle deadline (6h, the recorded owner decision).
@@ -109,6 +119,9 @@ impl Config {
           .ok()
           .as_deref(),
       )?,
+      udp_max_block_szx: parse_udp_max_block(
+        std::env::var("LOFT_UDP_MAX_BLOCK_BYTES").ok().as_deref(),
+      )?,
     })
   }
 }
@@ -126,9 +139,9 @@ fn parse_dtls_stack(value: Option<&str>) -> Result<DtlsStack, String> {
   }
 }
 
-/// Fails closed on a bad value rather than falling back to the default,
-/// like the stack selector above and unlike the cache TTLs: this var
-/// exists to rescue a fleet whose link cannot complete a handshake in the
+/// Both tuning vars below fail closed on a bad value rather than falling
+/// back to the default, like the stack selector above and unlike the cache
+/// TTLs: each exists to rescue a fleet whose link cannot live with the
 /// default, so a typo that silently restored it would reinstate exactly
 /// the failure the operator set the var to avoid.
 fn parse_handshake_deadline(value: Option<&str>) -> Result<Duration, String> {
@@ -141,6 +154,26 @@ fn parse_handshake_deadline(value: Option<&str>) -> Result<Duration, String> {
       "LOFT_HANDSHAKE_DEADLINE_SECS must be 1..={MAX_HANDSHAKE_DEADLINE_SECS} seconds, got {raw:?}"
     )),
   }
+}
+
+/// Only a legal RFC 7959 block size is accepted: the value is both the
+/// whole-response threshold and the block size used above it, so anything
+/// else would be served as a differently sized block than it names.
+fn parse_udp_max_block(value: Option<&str>) -> Result<u8, String> {
+  let Some(raw) = value else {
+    return Ok(MAX_SZX);
+  };
+  match raw.trim().parse::<usize>().ok().and_then(szx_for_bytes) {
+    Some(szx) => Ok(szx),
+    None => Err(format!(
+      "LOFT_UDP_MAX_BLOCK_BYTES must be a CoAP block size \
+       (16, 32, 64, 128, 256, 512, 1024), got {raw:?}"
+    )),
+  }
+}
+
+fn szx_for_bytes(bytes: usize) -> Option<u8> {
+  (0..=MAX_SZX).find(|szx| block::size_for(*szx) == bytes)
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -234,6 +267,23 @@ mod tests {
       let err = parse_handshake_deadline(Some(bad)).expect_err("must fail closed");
       assert!(
         err.contains("LOFT_HANDSHAKE_DEADLINE_SECS"),
+        "error names the var for {bad:?}: {err}"
+      );
+    }
+  }
+
+  #[test]
+  fn udp_max_block_takes_only_coap_block_sizes() {
+    assert_eq!(parse_udp_max_block(None), Ok(MAX_SZX));
+    assert_eq!(parse_udp_max_block(Some("1024")), Ok(6));
+    assert_eq!(parse_udp_max_block(Some(" 512 ")), Ok(5));
+    assert_eq!(parse_udp_max_block(Some("16")), Ok(0));
+    // 2048 is a legal power of two and NOT a legal block size; 768 is the
+    // shape of "the modem's ceiling" written literally.
+    for bad in ["2048", "768", "1000", "0", "", "512b"] {
+      let err = parse_udp_max_block(Some(bad)).expect_err("must fail closed");
+      assert!(
+        err.contains("LOFT_UDP_MAX_BLOCK_BYTES"),
         "error names the var for {bad:?}: {err}"
       );
     }

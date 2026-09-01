@@ -69,7 +69,7 @@ const CONN_CHANNEL_DEPTH: usize = 32;
 const READ_TICK: Duration = Duration::from_secs(1);
 const IDLE_DEADLINE: Duration = Duration::from_secs(300);
 /// Path MTU assumption for handshake flights; CoAP responses stay under it
-/// via the handler's spontaneous Block2 (1024-byte blocks).
+/// via the handler's spontaneous Block2 (`LOFT_UDP_MAX_BLOCK_BYTES`).
 const DTLS_MTU: u32 = 1400;
 
 /// The claimed source address of the datagram currently being fed to an
@@ -595,6 +595,7 @@ mod tests {
     let conns: ConnMap = Arc::new(Mutex::new(HashMap::new()));
     let handler = Arc::new(Handler::new(
       Dovecote::new("http://127.0.0.1:9").expect("upstream stub"),
+      crate::coap::block::MAX_SZX,
     ));
 
     let loop_conns = conns.clone();

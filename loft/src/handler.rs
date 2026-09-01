@@ -38,14 +38,6 @@ const KNOWN_OPTIONS: &[u16] = &[
   option::SIZE1,
 ];
 
-/// Above this, a UDP response body is spontaneously Block2-fragmented even
-/// when the client didn't ask (szx 6 = 1024-byte blocks) -- large
-/// datagrams mean IP fragmentation, which is exactly what block-wise
-/// transfer exists to avoid. TCP responses (RFC 8323 frames) are sent
-/// whole unless the client asked for Block2, matching the minimal
-/// `~/pigeon` client, which reads one frame and speaks no Block2.
-const UDP_SPONTANEOUS_BLOCK_THRESHOLD: usize = 1024;
-
 /// Cap on a Block1-reassembled request body. Generous over the largest
 /// legitimate device write (16 KiB log chunks).
 const MAX_BLOCK1_BODY: usize = 64 * 1024;
@@ -100,13 +92,32 @@ struct Reassembly {
 pub struct Handler<U> {
   upstream: U,
   block1: Mutex<HashMap<(u64, String), Reassembly>>,
+  udp_max_szx: u8,
 }
 
 impl<U: Upstream> Handler<U> {
-  pub fn new(upstream: U) -> Handler<U> {
+  /// `udp_max_szx` is the deployment's datagram ceiling as a block-size
+  /// exponent (`Config::udp_max_block_szx`).
+  pub fn new(upstream: U, udp_max_szx: u8) -> Handler<U> {
     Handler {
       upstream,
       block1: Mutex::new(HashMap::new()),
+      udp_max_szx,
+    }
+  }
+
+  /// Largest block this transport may carry. On UDP it is the link's
+  /// datagram ceiling: past it a body is Block2-fragmented whether or not
+  /// the client asked (a large datagram means IP fragmentation, which is
+  /// what block-wise transfer exists to avoid), and a client asking for
+  /// more is served this size. TCP (RFC 8323 frames) has no such limit --
+  /// a body goes whole unless the client asked for Block2, matching the
+  /// minimal `~/pigeon` client, which reads one frame and speaks no
+  /// Block2.
+  fn max_szx(&self, transport: Transport) -> u8 {
+    match transport {
+      Transport::Udp => self.udp_max_szx,
+      Transport::Tcp => MAX_SZX,
     }
   }
 
@@ -211,7 +222,7 @@ impl<U: Upstream> Handler<U> {
         }
         BodyState::Interim(msg) => msg,
       },
-      ("firmware", code::GET) => self.firmware(req, session).await,
+      ("firmware", code::GET) => self.firmware(req, session, transport).await,
       ("shadow" | "telemetry" | "logs" | "firmware", _) => {
         diagnostic(req, code::METHOD_NOT_ALLOWED, "method not allowed")
       }
@@ -263,17 +274,16 @@ impl<U: Upstream> Handler<U> {
     let mut out = Message::response(success, req);
     let full = resp.body;
 
+    let max_szx = self.max_szx(transport);
     let requested = req.option_uint(option::BLOCK2).and_then(Block::decode);
 
     let block = match requested {
-      Some(b) => Some(b),
-      None if transport == Transport::Udp && full.len() > UDP_SPONTANEOUS_BLOCK_THRESHOLD => {
-        Some(Block {
-          num: 0,
-          more: false,
-          szx: MAX_SZX,
-        })
-      }
+      Some(b) => Some(b.capped(max_szx)),
+      None if transport == Transport::Udp && full.len() > block::size_for(max_szx) => Some(Block {
+        num: 0,
+        more: false,
+        szx: max_szx,
+      }),
       None => None,
     };
 
@@ -314,16 +324,24 @@ impl<U: Upstream> Handler<U> {
   /// a ~500 KiB image never transits this process as a whole. Serving is
   /// ALWAYS block-wise, on both transports -- a client that sent no Block2
   /// gets block 0 with the more-bit set (RFC 7959 "spontaneous" Block2)
-  /// and continues from there.
-  async fn firmware(&self, req: &Message, session: &DeviceSession) -> Message {
-    let block = req
-      .option_uint(option::BLOCK2)
-      .and_then(Block::decode)
-      .unwrap_or(Block {
+  /// and continues from there, at the transport's largest block. First
+  /// contact has no prior state to recover from, so a UDP client must not
+  /// have to know to ask for less than its link can carry.
+  async fn firmware(
+    &self,
+    req: &Message,
+    session: &DeviceSession,
+    transport: Transport,
+  ) -> Message {
+    let max_szx = self.max_szx(transport);
+    let block = match req.option_uint(option::BLOCK2).and_then(Block::decode) {
+      Some(b) => b.capped(max_szx),
+      None => Block {
         num: 0,
         more: false,
-        szx: MAX_SZX,
-      });
+        szx: max_szx,
+      },
+    };
 
     let (start, end) = block.byte_range();
     let resp = match self
@@ -629,7 +647,7 @@ mod tests {
   #[tokio::test]
   async fn shadow_get_maps_to_content() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{\"target_version\":3}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let out = handler
       .handle(
@@ -657,7 +675,7 @@ mod tests {
   #[tokio::test]
   async fn uri_pigeon_id_must_match_handshake_identity() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let out = handler
       .handle(
@@ -674,7 +692,7 @@ mod tests {
   #[tokio::test]
   async fn unknown_paths_and_methods() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let out = handler
       .handle(
@@ -712,7 +730,7 @@ mod tests {
   #[tokio::test]
   async fn unknown_critical_option_rejected() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let mut req = request(code::GET, "pigeon-1", "shadow");
     req.push_option(35, b"coap://evil".to_vec()); // Proxy-Uri, critical
@@ -730,7 +748,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
     let out = handler
       .handle(
         &request(code::GET, "pigeon-1", "shadow"),
@@ -744,7 +762,7 @@ mod tests {
   #[tokio::test]
   async fn upstream_unreachable_maps_to_gateway_timeout() {
     let mock = MockUpstream::new(|_| Err("connect refused".into()));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
     let out = handler
       .handle(
         &request(code::GET, "pigeon-1", "shadow"),
@@ -764,7 +782,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let mut req = request(code::POST, "pigeon-1", "telemetry");
     req.payload = b"{\"temp\":\"21.5\"}".to_vec();
@@ -800,7 +818,7 @@ mod tests {
     // 2500-byte image -> 3 blocks at szx 6 (1024).
     static IMAGE: [u8; 2500] = [0x7E; 2500];
     let mock = firmware_upstream(&IMAGE);
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     // Block 0 (explicit).
     let mut req = request(code::GET, "pigeon-1", "firmware");
@@ -854,7 +872,7 @@ mod tests {
   async fn firmware_without_block2_starts_spontaneous_blockwise() {
     static IMAGE: [u8; 2500] = [0x11; 2500];
     let mock = firmware_upstream(&IMAGE);
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let out = handler
       .handle(
@@ -882,7 +900,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let mut req = request(code::GET, "pigeon-1", "firmware");
     req.set_option_uint(
@@ -903,7 +921,7 @@ mod tests {
     let big = format!("{{\"blob\":\"{}\"}}", "x".repeat(4000));
     let big_clone = big.clone();
     let mock = MockUpstream::new(move |_| Ok(json_ok(&big_clone)));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     // UDP: fragmented.
     let out = handler
@@ -946,6 +964,148 @@ mod tests {
     assert_eq!(out.option_uint(option::BLOCK2), None);
   }
 
+  /// The default ceiling's exact boundary: a body the size of one block is
+  /// still sent whole, one byte more is not.
+  #[tokio::test]
+  async fn default_ceiling_sends_a_full_block_whole() {
+    for (len, blocked) in [(1024, false), (1025, true)] {
+      let body = "x".repeat(len);
+      let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+      let handler = Handler::new(&mock, MAX_SZX);
+      let out = handler
+        .handle(
+          &request(code::GET, "pigeon-1", "shadow"),
+          &session(),
+          Transport::Udp,
+        )
+        .await;
+      assert_eq!(
+        out.option_uint(option::BLOCK2).is_some(),
+        blocked,
+        "{len}-byte body"
+      );
+      assert_eq!(out.payload.len(), if blocked { 1024 } else { len });
+    }
+  }
+
+  /// The nRF9160 case: a body in the band the default emits whole but a
+  /// 1 kB datagram ceiling cannot carry.
+  #[tokio::test]
+  async fn a_lowered_ceiling_blocks_a_body_the_default_sends_whole() {
+    let body = "x".repeat(900);
+    let expected = body.clone();
+    let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+    let handler = Handler::new(&mock, 5);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Udp,
+      )
+      .await;
+    assert_eq!(out.payload, expected.as_bytes()[..512]);
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert_eq!((b.num, b.more, b.szx), (0, true, 5));
+    assert_eq!(out.option_uint(option::SIZE2), Some(900));
+
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 1,
+        more: false,
+        szx: 5,
+      }
+      .encode(),
+    );
+    let out = handler.handle(&req, &session(), Transport::Udp).await;
+    assert_eq!(out.payload, expected.as_bytes()[512..]);
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert!(!b.more);
+  }
+
+  /// A client asking for a block the link cannot carry is served a smaller
+  /// one at the same offset, not the block it asked for.
+  #[tokio::test]
+  async fn a_lowered_ceiling_caps_what_a_client_asks_for() {
+    let body = "x".repeat(2000);
+    let expected = body.clone();
+    let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+    let handler = Handler::new(&mock, 5);
+
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 1,
+        more: false,
+        szx: 6,
+      }
+      .encode(),
+    );
+    let out = handler.handle(&req, &session(), Transport::Udp).await;
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert_eq!((b.num, b.szx), (2, 5), "same offset at the served size");
+    assert_eq!(out.payload, expected.as_bytes()[1024..1536]);
+  }
+
+  /// The ceiling is a datagram limit, so TCP keeps serving whole frames and
+  /// honoring the client's own block size.
+  #[tokio::test]
+  async fn a_lowered_ceiling_leaves_tcp_alone() {
+    let body = "x".repeat(2000);
+    let len = body.len();
+    let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+    let handler = Handler::new(&mock, 5);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Tcp,
+      )
+      .await;
+    assert_eq!(out.payload.len(), len);
+    assert_eq!(out.option_uint(option::BLOCK2), None);
+
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 0,
+        more: false,
+        szx: 6,
+      }
+      .encode(),
+    );
+    let out = handler.handle(&req, &session(), Transport::Tcp).await;
+    assert_eq!(out.payload.len(), 1024);
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert_eq!(b.szx, 6);
+  }
+
+  /// First contact for a firmware download has no prior state to recover
+  /// from, so the ceiling has to hold there without the device asking.
+  #[tokio::test]
+  async fn firmware_first_block_honors_the_udp_ceiling() {
+    static IMAGE: [u8; 2500] = [0x33; 2500];
+    let mock = firmware_upstream(&IMAGE);
+    let handler = Handler::new(&mock, 5);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "firmware"),
+        &session(),
+        Transport::Udp,
+      )
+      .await;
+    assert_eq!(out.payload.len(), 512);
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert_eq!((b.num, b.more, b.szx), (0, true, 5));
+    assert_eq!(mock.calls.lock().unwrap()[0].range, Some((0, 511)));
+  }
+
   #[tokio::test]
   async fn block1_reassembly_roundtrip() {
     let mock = MockUpstream::new(|_| {
@@ -954,7 +1114,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
     let sess = session();
 
     let part = |num: u32, more: bool, payload: &[u8]| {
@@ -999,7 +1159,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let block1_start = || {
       let mut req = request(code::POST, "pigeon-1", "logs");
@@ -1067,7 +1227,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let at_addr = |conn_id: u64| DeviceSession {
       pigeon_id: "pigeon-1".into(),
@@ -1113,7 +1273,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     let at = |peer: &str| DeviceSession {
       pigeon_id: "pigeon-1".into(),
@@ -1148,7 +1308,7 @@ mod tests {
   #[tokio::test]
   async fn block2_past_end_of_short_body_is_rejected_not_a_panic() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
 
     // Block num 5 against a 2-byte body: must be a clean 4.00.
     let mut req = request(code::GET, "pigeon-1", "shadow");
@@ -1171,7 +1331,7 @@ mod tests {
         ..Default::default()
       })
     });
-    let handler = Handler::new(&empty);
+    let handler = Handler::new(&empty, MAX_SZX);
     let mut req = request(code::GET, "pigeon-1", "shadow");
     req.set_option_uint(
       option::BLOCK2,
@@ -1190,7 +1350,7 @@ mod tests {
   #[tokio::test]
   async fn block1_out_of_sequence_is_4_08() {
     let mock = MockUpstream::new(|_| Ok(json_ok("{}")));
-    let handler = Handler::new(&mock);
+    let handler = Handler::new(&mock, MAX_SZX);
     let sess = session();
 
     let mut req = request(code::POST, "pigeon-1", "logs");

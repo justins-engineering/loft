@@ -775,6 +775,7 @@ mod tests {
     let quota = ConnQuota::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP);
     let handler = Arc::new(Handler::new(
       Dovecote::new("http://127.0.0.1:9").expect("upstream stub"),
+      crate::coap::block::MAX_SZX,
     ));
     let loop_maps = maps.clone();
     let handle = rt.handle().clone();

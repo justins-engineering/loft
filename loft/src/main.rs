@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
   ));
 
   let upstream = Dovecote::new(&config.dovecote_url).map_err(|e| anyhow::anyhow!(e))?;
-  let handler = Arc::new(Handler::new(upstream));
+  let handler = Arc::new(Handler::new(upstream, config.udp_max_block_szx));
 
   tracing::info!(
     udp = %config.udp_listen,
@@ -74,6 +74,7 @@ fn main() -> anyhow::Result<()> {
     canary = config.dtls_mbed_canary_addr.as_deref().unwrap_or("off"),
     cid_idle_secs = config.dtls_cid_idle.as_secs(),
     handshake_deadline_secs = config.handshake_deadline.as_secs(),
+    udp_max_block_bytes = crate::coap::block::size_for(config.udp_max_block_szx),
     "loft starting"
   );
 

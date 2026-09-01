@@ -15,9 +15,14 @@ pub struct Block {
 /// constrained FOTA clients already use against dovecote.
 pub const MAX_SZX: u8 = 6;
 
+/// Byte size of a block-size exponent (RFC 7959: 2^(szx+4)).
+pub fn size_for(szx: u8) -> usize {
+  1 << (szx + 4)
+}
+
 impl Block {
   pub fn size(&self) -> usize {
-    1 << (self.szx + 4)
+    size_for(self.szx)
   }
 
   pub fn offset(&self) -> u64 {
@@ -39,6 +44,23 @@ impl Block {
 
   pub fn encode(&self) -> u32 {
     (self.num << 4) | (u32::from(self.more) << 3) | u32::from(self.szx.min(MAX_SZX))
+  }
+
+  /// This block re-expressed at no more than `max_szx`, keeping the byte
+  /// offset it asked for. RFC 7959 lets a server answer with a smaller
+  /// block than requested, and requires the response's NUM to name the
+  /// same offset at the size actually used. An absurd NUM saturates
+  /// rather than wrapping into a valid-looking offset; the caller's own
+  /// range check refuses it.
+  pub fn capped(self, max_szx: u8) -> Block {
+    if self.szx <= max_szx {
+      return self;
+    }
+    Block {
+      num: self.num.saturating_mul(1 << (self.szx - max_szx)),
+      more: self.more,
+      szx: max_szx,
+    }
   }
 
   /// The inclusive HTTP byte range covering this block.
@@ -99,6 +121,46 @@ mod tests {
     let b = Block::decode(0x0F).unwrap();
     assert_eq!(b.szx, MAX_SZX);
     assert_eq!(b.size(), 1024);
+  }
+
+  #[test]
+  fn capping_preserves_the_requested_offset() {
+    for (num, szx, max_szx) in [(0, 6, 5), (1, 6, 5), (7, 6, 4), (3, 5, 0), (100, 6, 6)] {
+      let asked = Block {
+        num,
+        more: false,
+        szx,
+      };
+      let served = asked.capped(max_szx);
+      assert!(served.szx <= max_szx);
+      assert_eq!(
+        served.offset(),
+        asked.offset(),
+        "capping {asked:?} to szx {max_szx} moved the offset"
+      );
+    }
+  }
+
+  #[test]
+  fn capping_leaves_a_small_enough_block_alone() {
+    let b = Block {
+      num: 9,
+      more: true,
+      szx: 4,
+    };
+    assert_eq!(b.capped(MAX_SZX), b);
+    assert_eq!(b.capped(4), b);
+  }
+
+  #[test]
+  fn capping_an_absurd_num_saturates_instead_of_wrapping() {
+    let b = Block {
+      num: u32::MAX,
+      more: false,
+      szx: 6,
+    };
+    // Must stay past any real resource end so the range check refuses it.
+    assert_eq!(b.capped(0).num, u32::MAX);
   }
 
   #[test]
