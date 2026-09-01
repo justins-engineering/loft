@@ -84,7 +84,8 @@ outbound HTTPS leg, one secret read through `LoadCredential=` rather than the en
 development and for deploying elsewhere.
 
 Configuration is entirely environment variables (`LOFT_DOVECOTE_URL`, `LOFT_UDP_LISTEN`,
-`LOFT_TCP_LISTEN`, `LOFT_PSK_TTL_SECS`, `LOFT_LOG`, `LOFT_DTLS_STACK`) plus the service
+`LOFT_TCP_LISTEN`, `LOFT_PSK_TTL_SECS`, `LOFT_LOG`, `LOFT_DTLS_STACK`,
+`LOFT_HANDSHAKE_DEADLINE_SECS`) plus the service
 secret. The listeners default to IPv4; `[::]:5684` as a listen address binds dual-stack, IPv4
 and IPv6 on one socket. `docs/infra/coap-terminator.md` is the full runbook: bring-up in both
 deployment shapes, firewall rules for each, the IPv6 order of operations, secret rotation, and

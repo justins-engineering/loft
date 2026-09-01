@@ -47,10 +47,24 @@ pub struct Config {
   /// Multi-hour PSM sleep gaps are the CID design case, so this is hours
   /// where the non-CID deadline is minutes.
   pub dtls_cid_idle: Duration,
+  /// LOFT_HANDSHAKE_DEADLINE_SECS: wall-clock bound on one handshake, on
+  /// every listener. A cellular link waking out of PSM in poor RF can
+  /// carry multi-second round trips, and the cookie exchange spends two
+  /// of them before the PSK flights start.
+  pub handshake_deadline: Duration,
 }
 
 /// Default CID-session idle deadline (6h, the recorded owner decision).
 const DEFAULT_CID_IDLE: Duration = Duration::from_secs(21_600);
+
+/// Default handshake deadline, the figure every listener carried when it
+/// was a compile-time constant.
+const DEFAULT_HANDSHAKE_DEADLINE_SECS: u64 = 30;
+
+/// Widest accepted handshake deadline. An unfinished handshake holds a
+/// pre-auth connection slot, the scarcest resource here, and the listeners
+/// drop an idle *authenticated* non-CID session at 300s.
+const MAX_HANDSHAKE_DEADLINE_SECS: u64 = 300;
 
 impl Config {
   /// Reads config from the environment. The only hard-required var is
@@ -90,6 +104,11 @@ impl Config {
         .and_then(|v| v.parse::<u64>().ok())
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_CID_IDLE),
+      handshake_deadline: parse_handshake_deadline(
+        std::env::var("LOFT_HANDSHAKE_DEADLINE_SECS")
+          .ok()
+          .as_deref(),
+      )?,
     })
   }
 }
@@ -103,6 +122,23 @@ fn parse_dtls_stack(value: Option<&str>) -> Result<DtlsStack, String> {
     Some("mbedtls") => Ok(DtlsStack::Mbedtls),
     Some(other) => Err(format!(
       "LOFT_DTLS_STACK must be \"openssl\" or \"mbedtls\", got {other:?}"
+    )),
+  }
+}
+
+/// Fails closed on a bad value rather than falling back to the default,
+/// like the stack selector above and unlike the cache TTLs: this var
+/// exists to rescue a fleet whose link cannot complete a handshake in the
+/// default, so a typo that silently restored it would reinstate exactly
+/// the failure the operator set the var to avoid.
+fn parse_handshake_deadline(value: Option<&str>) -> Result<Duration, String> {
+  let Some(raw) = value else {
+    return Ok(Duration::from_secs(DEFAULT_HANDSHAKE_DEADLINE_SECS));
+  };
+  match raw.trim().parse::<u64>() {
+    Ok(secs) if (1..=MAX_HANDSHAKE_DEADLINE_SECS).contains(&secs) => Ok(Duration::from_secs(secs)),
+    _ => Err(format!(
+      "LOFT_HANDSHAKE_DEADLINE_SECS must be 1..={MAX_HANDSHAKE_DEADLINE_SECS} seconds, got {raw:?}"
     )),
   }
 }
@@ -178,6 +214,29 @@ mod tests {
       err.contains("LOFT_DTLS_STACK"),
       "error names the var: {err}"
     );
+  }
+
+  #[test]
+  fn handshake_deadline_defaults_and_bounds() {
+    assert_eq!(
+      parse_handshake_deadline(None),
+      Ok(Duration::from_secs(DEFAULT_HANDSHAKE_DEADLINE_SECS))
+    );
+    assert_eq!(
+      parse_handshake_deadline(Some(" 90 ")),
+      Ok(Duration::from_secs(90))
+    );
+    assert_eq!(
+      parse_handshake_deadline(Some("300")),
+      Ok(Duration::from_secs(MAX_HANDSHAKE_DEADLINE_SECS))
+    );
+    for bad in ["0", "301", "-5", "30s", "", "thirty"] {
+      let err = parse_handshake_deadline(Some(bad)).expect_err("must fail closed");
+      assert!(
+        err.contains("LOFT_HANDSHAKE_DEADLINE_SECS"),
+        "error names the var for {bad:?}: {err}"
+      );
+    }
   }
 
   #[test]
