@@ -524,7 +524,7 @@ impl<U: Upstream> Handler<U> {
           400 => code::BAD_REQUEST,
           401 => code::UNAUTHORIZED,
           403 => {
-            // loft has no alert yet; the journal is where an edge block shows.
+            // The journal is where an edge block shows.
             tracing::warn!(status = r.status, "upstream 403 from in front of dovecote");
             code::BAD_GATEWAY
           }
