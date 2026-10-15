@@ -253,6 +253,8 @@ impl<U: Upstream> Handler<U> {
 
   /// JSON-bodied routes: map the upstream status, attach the JSON payload,
   /// and apply response-side Block2 (explicit, or spontaneous on UDP).
+  /// Every blocked response carries an ETag, the first 8 bytes of the full
+  /// body's sha256; a whole response carries none.
   fn json_response(
     &self,
     req: &Message,
@@ -310,6 +312,10 @@ impl<U: Upstream> Handler<U> {
           }
           .encode(),
         );
+        // Each block is cut from a fresh upstream read, so a same-length
+        // edit between blocks would pass Size2; the ETag lets the client
+        // see the representation changed (RFC 7959 section 2.4).
+        out.push_option(option::ETAG, openssl::sha::sha256(&full)[..8].to_vec());
         if b.num == 0 {
           out.set_option_uint(option::SIZE2, full.len() as u32);
         }
@@ -962,6 +968,117 @@ mod tests {
       .await;
     assert_eq!(out.payload.len(), big.len());
     assert_eq!(out.option_uint(option::BLOCK2), None);
+  }
+
+  /// A blocked JSON body carries the same 8-byte ETag on every block, so a
+  /// client can tell its blocks came from one representation.
+  #[tokio::test]
+  async fn json_block2_carries_one_etag_on_every_block() {
+    let body = "x".repeat(2500);
+    let expected = openssl::sha::sha256(body.as_bytes())[..8].to_vec();
+    let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+    let handler = Handler::new(&mock, MAX_SZX);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Udp,
+      )
+      .await;
+    let first = out.first_option(option::ETAG).expect("block 0 ETag");
+    assert_eq!(first, expected.as_slice());
+    assert_eq!(out.option_values(option::ETAG).count(), 1);
+
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 2,
+        more: false,
+        szx: 6,
+      }
+      .encode(),
+    );
+    let out = handler.handle(&req, &session(), Transport::Udp).await;
+    let b = Block::decode(out.option_uint(option::BLOCK2).unwrap()).unwrap();
+    assert!(!b.more);
+    assert_eq!(out.first_option(option::ETAG), Some(expected.as_slice()));
+  }
+
+  /// An edit of the same length between two blocks keeps Size2 equal; only
+  /// the ETag tells the client its blocks belong to two documents.
+  #[tokio::test]
+  async fn json_block2_etag_changes_with_the_shadow() {
+    let before = "a".repeat(2000);
+    let after = "b".repeat(2000);
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    let mock = MockUpstream::new(move |_| {
+      let body = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+        &before
+      } else {
+        &after
+      };
+      Ok(json_ok(body))
+    });
+    let handler = Handler::new(&mock, MAX_SZX);
+
+    let block0 = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Udp,
+      )
+      .await;
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 1,
+        more: false,
+        szx: 6,
+      }
+      .encode(),
+    );
+    let block1 = handler.handle(&req, &session(), Transport::Udp).await;
+
+    let tag0 = block0.first_option(option::ETAG).expect("block 0 ETag");
+    let tag1 = block1.first_option(option::ETAG).expect("block 1 ETag");
+    assert_eq!(tag0.len(), 8);
+    assert_eq!(tag1.len(), 8);
+    assert_ne!(tag0, tag1);
+  }
+
+  /// An explicit Block2 request over TCP is tagged too; a whole response,
+  /// which cannot tear, is not.
+  #[tokio::test]
+  async fn json_etag_rides_only_on_blocked_responses() {
+    let body = "x".repeat(2000);
+    let mock = MockUpstream::new(move |_| Ok(json_ok(&body)));
+    let handler = Handler::new(&mock, MAX_SZX);
+
+    let mut req = request(code::GET, "pigeon-1", "shadow");
+    req.set_option_uint(
+      option::BLOCK2,
+      Block {
+        num: 0,
+        more: false,
+        szx: 6,
+      }
+      .encode(),
+    );
+    let out = handler.handle(&req, &session(), Transport::Tcp).await;
+    assert_eq!(out.first_option(option::ETAG).map(<[u8]>::len), Some(8));
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Tcp,
+      )
+      .await;
+    assert_eq!(out.option_uint(option::BLOCK2), None);
+    assert_eq!(out.first_option(option::ETAG), None);
   }
 
   /// The default ceiling's exact boundary: a body the size of one block is
