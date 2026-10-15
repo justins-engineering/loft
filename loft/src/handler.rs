@@ -546,8 +546,11 @@ impl<U: Upstream> Handler<U> {
         };
         let mut out = Message::response(coap_code, req);
         // Diagnostic payload (RFC 7252 section 5.5.2): upstream's error
-        // text, capped.
-        out.payload = r.body.into_iter().take(128).collect();
+        // text, capped. The RFC requires UTF-8, so a cut never splits a
+        // character and bytes that are not text become U+FFFD.
+        let head = &r.body[..r.body.len().min(128)];
+        let text = String::from_utf8_lossy(head);
+        out.payload = text.as_bytes()[..text.floor_char_boundary(128)].to_vec();
         out
       }
       Err(e) => {
@@ -817,6 +820,34 @@ mod tests {
       )
       .await;
     assert_eq!(out.code, code::BAD_GATEWAY);
+  }
+
+  /// The diagnostic stays UTF-8 when the 128-byte cap falls inside a
+  /// character or upstream's body is not text.
+  #[tokio::test]
+  async fn error_diagnostic_is_utf8_at_the_cap() {
+    let mut split = vec![b'a'; 127];
+    split.extend_from_slice("\u{e9}tail".as_bytes());
+    for body in [split, vec![0xff; 200]] {
+      let mock = MockUpstream::new(move |_| {
+        Ok(UpstreamResponse {
+          status: 500,
+          body: body.clone(),
+          ..Default::default()
+        })
+      });
+      let handler = Handler::new(&mock, MAX_SZX);
+      let out = handler
+        .handle(
+          &request(code::GET, "pigeon-1", "shadow"),
+          &session(),
+          Transport::Tcp,
+        )
+        .await;
+      assert_eq!(out.code, code::BAD_GATEWAY);
+      assert!(out.payload.len() <= 128);
+      assert!(std::str::from_utf8(&out.payload).is_ok());
+    }
   }
 
   #[tokio::test]
