@@ -515,7 +515,8 @@ impl<U: Upstream> Handler<U> {
   /// routes never answer 403, so one comes from in front of them (an edge
   /// rule or an access gate) and says nothing about the device's
   /// credentials; a 4.03 would hold the device as refused. The payload is
-  /// upstream's text, capped at 128 bytes.
+  /// upstream's text capped at 128 bytes, or loft's own when upstream is
+  /// unreachable.
   fn error_response(&self, req: &Message, resp: Result<UpstreamResponse, String>) -> Message {
     match resp {
       Ok(r) => {
