@@ -50,8 +50,12 @@ pub struct Dovecote {
 }
 
 impl Dovecote {
+  /// Builds the client for `base_url`. Redirects are not followed: dovecote's
+  /// device routes never redirect, and a followed one turns a POST into a GET
+  /// of some other page whose 200 would read as the device's report landing.
   pub fn new(base_url: &str) -> Result<Dovecote, String> {
     let client = reqwest::Client::builder()
+      .redirect(reqwest::redirect::Policy::none())
       // Distinctive UA -- the PidgeIoT repo's docs/api.md has a device-auth
       // troubleshooting note for this:
       // default library UAs can trip edge bot heuristics into HTML 403s.
@@ -118,5 +122,51 @@ impl Upstream for Dovecote {
       firmware_size,
       firmware_sha256,
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
+
+  /// A 302 from in front of dovecote reaches the handler as a 302, not as
+  /// the 200 of the page it points at.
+  #[tokio::test]
+  async fn redirect_is_not_followed() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+      for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { return };
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        let reply: &[u8] = if buf[..n].starts_with(b"GET /login") {
+          b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n<html>"
+        } else {
+          b"HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\n\
+            Connection: close\r\n\r\n"
+        };
+        let _ = stream.write_all(reply);
+      }
+    });
+
+    let mut base = String::with_capacity(32);
+    base.push_str("http://");
+    base.push_str(&addr.to_string());
+    let upstream = Dovecote::new(&base).expect("client");
+    let resp = upstream
+      .device_request(
+        Method::Post,
+        "pigeon-1",
+        "telemetry",
+        "token",
+        None,
+        Some((b"{}".to_vec(), "application/json")),
+      )
+      .await
+      .expect("response");
+    assert_eq!(resp.status, 302);
   }
 }
