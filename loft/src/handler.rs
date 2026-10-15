@@ -230,6 +230,8 @@ impl<U: Upstream> Handler<U> {
     }
   }
 
+  /// Calls dovecote's `/device/pigeons/:id/<leaf>` as this session's pigeon,
+  /// warning on a 403 with the route and pigeon it hit.
   async fn upstream_call(
     &self,
     session: &DeviceSession,
@@ -238,7 +240,7 @@ impl<U: Upstream> Handler<U> {
     range: Option<(u64, u64)>,
     body: Option<(Vec<u8>, &'static str)>,
   ) -> Result<UpstreamResponse, String> {
-    self
+    let resp = self
       .upstream
       .device_request(
         method,
@@ -248,7 +250,19 @@ impl<U: Upstream> Handler<U> {
         range,
         body,
       )
-      .await
+      .await;
+    if let Ok(r) = &resp
+      && r.status == 403
+    {
+      // The journal is where an edge block shows, and an edge rule is
+      // matched by route, so the line names the route and the pigeon.
+      tracing::warn!(
+        pigeon_id = %session.pigeon_id,
+        leaf,
+        "upstream 403 from in front of dovecote"
+      );
+    }
+    resp
   }
 
   /// JSON-bodied routes: map the upstream status, attach the JSON payload,
@@ -523,11 +537,7 @@ impl<U: Upstream> Handler<U> {
         let coap_code = match r.status {
           400 => code::BAD_REQUEST,
           401 => code::UNAUTHORIZED,
-          403 => {
-            // The journal is where an edge block shows.
-            tracing::warn!(status = r.status, "upstream 403 from in front of dovecote");
-            code::BAD_GATEWAY
-          }
+          403 => code::BAD_GATEWAY,
           404 => code::NOT_FOUND,
           405 => code::METHOD_NOT_ALLOWED,
           413 => code::REQUEST_ENTITY_TOO_LARGE,
