@@ -509,13 +509,24 @@ impl<U: Upstream> Handler<U> {
     }
   }
 
+  /// Maps a failed upstream call onto a CoAP error response: 400, 401, 404,
+  /// 405 and 413 keep their CoAP equivalents, 403 and 5xx answer 5.02, any
+  /// other status 4.00, and an unreachable upstream 5.04. dovecote's device
+  /// routes never answer 403, so one comes from in front of them (an edge
+  /// rule or an access gate) and says nothing about the device's
+  /// credentials; a 4.03 would hold the device as refused. The payload is
+  /// upstream's text, capped at 128 bytes.
   fn error_response(&self, req: &Message, resp: Result<UpstreamResponse, String>) -> Message {
     match resp {
       Ok(r) => {
         let coap_code = match r.status {
           400 => code::BAD_REQUEST,
           401 => code::UNAUTHORIZED,
-          403 => code::FORBIDDEN,
+          403 => {
+            // loft has no alert yet; the journal is where an edge block shows.
+            tracing::warn!(status = r.status, "upstream 403 from in front of dovecote");
+            code::BAD_GATEWAY
+          }
           404 => code::NOT_FOUND,
           405 => code::METHOD_NOT_ALLOWED,
           413 => code::REQUEST_ENTITY_TOO_LARGE,
@@ -763,6 +774,38 @@ mod tests {
       )
       .await;
     assert_eq!(out.code, code::UNAUTHORIZED);
+  }
+
+  /// A 403 never comes from dovecote's device routes, so it is upstream
+  /// trouble (5.02), not the credential refusal the device holds on.
+  #[tokio::test]
+  async fn upstream_403_maps_to_bad_gateway() {
+    let mock = MockUpstream::new(|_| {
+      Ok(UpstreamResponse {
+        status: 403,
+        body: b"<!DOCTYPE html><title>Access denied</title>".to_vec(),
+        ..Default::default()
+      })
+    });
+    let handler = Handler::new(&mock, MAX_SZX);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "shadow"),
+        &session(),
+        Transport::Tcp,
+      )
+      .await;
+    assert_eq!(out.code, code::BAD_GATEWAY);
+
+    let out = handler
+      .handle(
+        &request(code::GET, "pigeon-1", "firmware"),
+        &session(),
+        Transport::Tcp,
+      )
+      .await;
+    assert_eq!(out.code, code::BAD_GATEWAY);
   }
 
   #[tokio::test]
